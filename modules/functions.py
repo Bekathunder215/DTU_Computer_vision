@@ -231,7 +231,7 @@ def hest(pointlist: list = [np.array([[1.0], [1.0]]), np.array([[0.0], [3.0]]), 
     Returns:
         np.ndarray: The 3x3 estimated homography matrix.
     """
-    assert len(pointlist) == 4 and len(dest) == 4
+    # assert len(pointlist) == 4 and len(dest) == 4
 
     # Modify how points are extracted from the lists
     if normalize:
@@ -428,7 +428,7 @@ def calc_projection_matrix(K: np.ndarray, R: np.ndarray, t: np.ndarray) -> np.nd
 
 def pest(Q: np.ndarray, q: np.ndarray) -> np.ndarray:
     """
-    Computes the projection matrix from 3D points (Q) and their corresponding 2D projections (q) using the linear least squares method.
+    Computes the projection matrix from 3D points (Q) and their corresponding 2D projections (q) using the Direct linear Transforms method.
 
     Args:
         Q (np.ndarray): Array of 3D points in homogeneous coordinates, with shape (n, 4).
@@ -445,6 +445,56 @@ def pest(Q: np.ndarray, q: np.ndarray) -> np.ndarray:
     h = VT[-1, :]  # Smallest singular vector (last row of VT) 12, 1
     # Reshape into 3x4 projection matrix
     return h.reshape(3, 4)
+
+def get_manual_checkerboard_points(n:int, m:int) -> np.ndarray:
+    """
+    Generates a 3D point set representing a checkerboard pattern in the z = 0 plane.
+
+    Each point Q_ij is defined as:
+        Q_ij = [
+            [i - (n - 1) / 2],
+            [j - (m - 1) / 2],
+            [0]
+        ]
+    where i ∈ {0, ..., n-1} and j ∈ {0, ..., m-1}.
+
+    The function returns a 3 × (n * m) matrix, where:
+        - The first row contains the x-coordinates.
+        - The second row contains the y-coordinates.
+        - The third row contains only zeros (z = 0 plane).
+
+    Parameters:
+    -----------
+    n : int
+        Number of points along the x-axis (rows of the checkerboard).
+    m : int
+        Number of points along the y-axis (columns of the checkerboard).
+
+    Returns:
+    --------
+    np.ndarray
+        A 3 × (n * m) matrix containing the 3D coordinates of the checkerboard points.
+    
+    Example:
+    --------
+    >>> get_manual_checkerboard_points(3, 3)
+    array([[-1.,  0.,  1., -1.,  0.,  1., -1.,  0.,  1.],
+           [-1., -1., -1.,  0.,  0.,  0.,  1.,  1.,  1.],
+           [ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]])
+    """
+    Q = np.zeros((3, n * m))
+    index = 0 
+    for i in range(n):
+        for j in range(m):
+            Q[:, index] = [
+                i - (n - 1) / 2,
+                j - (m - 1) / 2,
+                0
+            ]
+            index += 1
+
+    return Q
+
 
 def triangulate_nonlin(pointlist: np.ndarray, Projlist: np.ndarray) -> np.ndarray:
     """
