@@ -693,23 +693,34 @@ def gaussianSmoothing(
     Iy = cv2.sepFilter2D(im, -1, g.T, gd)
     return I, Ix, Iy
 
+def structureTensor(im: MatLike, sigma: float, epsilon: float) -> np.ndarray:
+    """
+    Computes the structure tensor for an image.
 
-def structureTensor(im, sigma, epsilon):
-    """Now create the function C = structureTensor(im, sigma, epsilon) where
-    C(x, y) = gϵ *Ix2(x, y) gϵ *Ix(x, y)Iy(x, y)
-    gϵ *Ix(x, y)Iy(x, y) gϵ *Iy2(x, y) (1)
-    and gϵ *. . . is the convolution of a new Gaussian kernel with width epsilon.
-    Use the structure tensor function on your test image. Do the resulting images still look correct?
-    We use two Gaussian widths in this function: sigma and epsilon. The first one sigma is used
-    to calculate the derivatives and the second one to calculate the structure tensor. Do we need to
-    use both? If you don’t know the answer, start on the next exercise and return to this question
-    afterwards."""
-    I, Ix, Iy = gaussianSmoothing(im, sigma)
-    ge, gde = gausian1DKernel(epsilon)
-    IxIy = cv2.filter2D(Ix * Iy, -1, ge * ge.T)
-    Ix2 = cv2.filter2D(Ix * Ix, -1, ge * ge.T)
-    Iy2 = cv2.filter2D(Iy * Iy, -1, ge * ge.T)
-    return np.hstack((np.vstack((Ix2, IxIy)), np.vstack((IxIy, Iy2))))
+    Args:
+        im (MatLike): Input grayscale image.
+        sigma (float): Standard deviation for Gaussian smoothing to compute derivatives.
+        epsilon (float): Standard deviation for Gaussian smoothing of the structure tensor.
+
+    Returns:
+        np.ndarray: A 3D array of shape (H, W, 3), where:
+            - [:, :, 0] contains Ix^2.
+            - [:, :, 1] contains Ix * Iy.
+            - [:, :, 2] contains Iy^2.
+    """
+    # Compute image derivatives
+    _, Ix, Iy = gaussianSmoothing(im, sigma)
+
+    # Compute Gaussian kernel for structure tensor smoothing
+    ge, _ = gausian1DKernel(epsilon)
+
+    # Compute components of the structure tensor
+    Ix2 = cv2.sepFilter2D(Ix * Ix, -1, ge.T, ge)
+    Iy2 = cv2.sepFilter2D(Iy * Iy, -1, ge.T, ge)
+    IxIy = cv2.sepFilter2D(Ix * Iy, -1, ge.T, ge)
+
+    # Return as a 3D array
+    return np.stack((Ix2, IxIy, Iy2), axis=-1)
 
 
 def harrisMeasure(im, sigma, epsilon, k):
@@ -765,6 +776,33 @@ def cornerDetector(im, sigma, epsilon, k, tau):
 
     return np.where(r >= tau, r, r >= tau)
 
+
+def cornerDetector_withcv2(im: MatLike, sigma: float, epsilon: float, k: float, tau: float) -> np.ndarray:
+    """
+    Detects corners in an image using the Harris corner detection method.
+
+    Args:
+        im (MatLike): Input grayscale image.
+        sigma (float): Standard deviation for Gaussian smoothing to compute derivatives.
+        epsilon (float): Standard deviation for Gaussian smoothing of the structure tensor.
+        k (float): Harris corner constant (typically 0.04 to 0.06).
+        tau (float): Threshold for corner response.
+
+    Returns:
+        np.ndarray: Array of corner coordinates as (x, y).
+    """
+    #Changes:
+    # Non-Maximum Suppression: Simplified using cv2.dilate for clarity and efficiency.
+    # Return Format: Changed to return corner coordinates as (x, y) for consistency with common conventions.
+    # Compute Harris response
+    r = harrisMeasure(im, sigma, epsilon, k)
+
+    # Non-maximum suppression
+    local_max = (r == cv2.dilate(r, np.ones((3, 3))))
+    corners = np.argwhere((r > tau) & local_max)
+
+    # Return as (x, y) coordinates
+    return corners[:, [1, 0]]  # Swap to (x, y) format
 
 def scaleSpaced(im: MatLike, sigma: int, n: int) -> list[np.ndarray]:
     """
@@ -866,10 +904,45 @@ def detectBlobs(
             blobs.append((x[j], y[j], sigma_i * np.sqrt(2)))
     return blobs
 
+def detectBlobs_withcv2(
+    im: MatLike, sigma: float, n: int, tau: float
+) -> list[tuple[int, int, float]]:
+    """
+    Detects blobs in an image using Difference of Gaussians (DoG) and non-maximum suppression.
+
+    Args:
+        im (MatLike): Input grayscale image.
+        sigma (float): Base standard deviation for scale space.
+        n (int): Number of scales.
+        tau (float): Threshold for blob detection.
+
+    Returns:
+        List[Tuple[int, int, float]]: Detected blobs as (x, y, radius).
+    """
+    # Changes:
+    # Non-Maximum Suppression: Simplified using cv2.dilate.
+    # Radius Calculation: Clarified the radius computation for each scale.
+
+    # Compute DoG images
+    dog_images = differenceOfGaussians(im, sigma, n)
+
+    blobs = []
+    for i, dog in enumerate(dog_images):
+        # Non-maximum suppression
+        local_max = (dog == cv2.dilate(dog, np.ones((3, 3))))
+        candidates = np.argwhere((dog > tau) & local_max)
+
+        # Compute radius for each scale
+        radius = sigma * (2 ** i) * np.sqrt(2)
+        for y, x in candidates:
+            blobs.append((x, y, radius))
+
+    return blobs
+
 
 def ransac_homography(
     pts1: np.ndarray, pts2: np.ndarray, num_iterations: int = 200, sigma: float = 3.0
-) -> tuple[np.ndarray, NumPyArrayFloat32]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Estimates the best homography matrix between two sets of points using RANSAC.
 
@@ -884,6 +957,8 @@ def ransac_homography(
             - best_H (np.ndarray): Estimated 3x3 homography matrix.
             - best_inliers (np.ndarray): Indices of inlier points used for the final model.
     """
+    if len(pts1) < 4 or len(pts2) < 4:
+        raise ValueError("At least 4 points are required to estimate a homography.")
     best_inliers = []
     best_H = None
 
@@ -924,6 +999,59 @@ def ransac_homography(
             best_H = H
 
     return (best_H, best_inliers)
+
+def ransac_homography_with_copilot(
+    pts1: np.ndarray, pts2: np.ndarray, num_iterations: int = 200, sigma: float = 3.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Estimates the best homography matrix between two sets of points using RANSAC.
+
+    Args:
+        pts1 (np.ndarray): Source points of shape (N, 2).
+        pts2 (np.ndarray): Destination points of shape (N, 2).
+        num_iterations (int, optional): Number of RANSAC iterations. Defaults to 200.
+        sigma (float, optional): Standard deviation for inlier thresholding. Defaults to 3.0.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: A tuple containing:
+            - best_H (np.ndarray): Estimated 3x3 homography matrix.
+            - best_inliers (np.ndarray): Boolean mask of inliers.
+    """
+    if len(pts1) < 4 or len(pts2) < 4:
+        raise ValueError("At least 4 points are required to estimate a homography.")
+
+    best_inliers = None
+    best_H = None
+    threshold = 5.99 * sigma**2  # Chi-squared threshold for 2 DOF
+
+    for _ in range(num_iterations):
+        # Randomly select 4 points
+        idx = np.random.choice(len(pts1), 4, replace=False)
+        src_pts = pts1[idx]
+        dst_pts = pts2[idx]
+
+        # Compute Homography
+        H, _ = cv2.findHomography(src_pts, dst_pts, method=0)
+        if H is None:
+            continue
+
+        # Transform all pts1 using H
+        pts1_homog = np.hstack([pts1, np.ones((pts1.shape[0], 1))])
+        pts2_proj = (H @ pts1_homog.T).T
+        pts2_proj = pts2_proj[:, :2] / pts2_proj[:, 2, np.newaxis]  # Normalize
+
+        # Compute squared errors
+        errors = np.sum((pts2_proj - pts2) ** 2, axis=1)
+
+        # Determine inliers
+        inliers = errors < threshold
+
+        # Update best model if more inliers are found
+        if best_inliers is None or np.sum(inliers) > np.sum(best_inliers):
+            best_inliers = inliers
+            best_H = H
+
+    return best_H, best_inliers
 
 
 def warpImage(
