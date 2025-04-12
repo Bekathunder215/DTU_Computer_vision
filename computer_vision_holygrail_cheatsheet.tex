@@ -1,0 +1,796 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\definecolor{codegray}{gray}{0.9}
+
+\lstset{
+    backgroundcolor=\color{codegray},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single
+}
+
+\title{Computer Vision Exam Notes}
+\author{Obiwan215}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Homogeneous Coordinates}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Homogeneous coordinates represent points with an extra coordinate.
+    \item A 2D point $(x, y)$ becomes $(x, y, 1)$.
+    \item In 3D, $(x, y, z)$ becomes $(x, y, z, 1)$.
+    \item Multiplying a homogeneous vector by a nonzero scalar does not change the point.
+\end{itemize}
+
+\textbf{Important:}
+\begin{itemize}
+    \item To convert back to Cartesian coordinates, divide by the last coordinate.
+\end{itemize}
+
+\textbf{Formula:}
+\[
+(x, y) \rightarrow (x, y, 1) \quad \text{and back:} \quad (x, y, w) \rightarrow \left( \frac{x}{w}, \frac{y}{w} \right)
+\]
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Convert the 2D point $(3, 4)$ to homogeneous form.
+    \item Then scale it by 5. What is the resulting Cartesian coordinate?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import numpy as np
+
+def to_homogeneous(points):
+    """Convert a set of (N, D) points to homogeneous (N, D+1)"""
+    points = np.asarray(points)
+    ones = np.ones((points.shape[0], 1))
+    return np.hstack([points, ones])
+
+def from_homogeneous(points_h):
+    """Convert homogeneous coordinates back to Cartesian"""
+    points_h = np.asarray(points_h)
+    return points_h[:, :-1] / points_h[:, -1][:, np.newaxis]
+\end{lstlisting}
+
+\newpage
+
+\section{Camera Model and Homographies}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item The camera projects 3D points to 2D image points.
+    \item The standard camera model is:
+    \[
+    p = K [R \mid t] P
+    \]
+    where:
+    \begin{itemize}
+        \item $P$ is a 3D point (in homogeneous coordinates),
+        \item $R$ is a rotation matrix (3x3),
+        \item $t$ is a translation vector (3x1),
+        \item $K$ is the intrinsic matrix (camera parameters).
+    \end{itemize}
+    \item Homography relates two images of a planar scene:
+    \[
+    p_1 = H p_2
+    \]
+\end{itemize}
+
+\textbf{Camera Intrinsic Matrix $K$:}
+\[
+K = \begin{bmatrix}
+f_x & s & c_x \\
+0 & f_y & c_y \\
+0 & 0 & 1
+\end{bmatrix}
+\]
+where:
+\begin{itemize}
+    \item $f_x$, $f_y$ are focal lengths (possibly different if pixels are not square),
+    \item $s$ is skew (often 0),
+    \item $(c_x, c_y)$ are the coordinates of the principal point.
+\end{itemize}
+
+\textbf{Homography Estimation:}
+\begin{itemize}
+    \item Need \textbf{at least 4 point correspondences} (for planar scenes).
+    \item In practice, normalize points before estimating $H$ for better numerical stability.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Given:
+    \[
+    K = \begin{bmatrix} 1000 & 0 & 320 \\ 0 & 1000 & 240 \\ 0 & 0 & 1 \end{bmatrix}
+    \]
+    and $R = I_{3x3}$ (identity), $t = (0, 0, -5)^T$.
+    
+    What is the projection matrix $P$?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+def project_point(K, R, t, P):
+    """Projects 3D point(s) P into 2D using camera intrinsics and extrinsics."""
+    P = np.asarray(P)
+    if P.ndim == 1:
+        P = P[:, np.newaxis]
+    RT = np.hstack([R, t.reshape(-1,1)])
+    P_h = np.vstack([P, np.ones((1, P.shape[1]))])
+    p = K @ RT @ P_h
+    p /= p[-1]
+    return p[:2]
+\end{lstlisting}
+
+\newpage
+\section{Multiview Geometry}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item When two cameras view the same scene, their corresponding points satisfy the epipolar constraint.
+    \[
+    p_2^T F p_1 = 0
+    \]
+    where $F$ is the \textbf{Fundamental matrix}.
+    \item If camera intrinsics are known, we can use the \textbf{Essential matrix} $E$:
+    \[
+    p_2^T E p_1 = 0
+    \]
+    \item Relationship between $E$ and $F$:
+    \[
+    E = K_2^T F K_1
+    \]
+\end{itemize}
+
+\textbf{Important facts:}
+\begin{itemize}
+    \item Minimum points to estimate:
+    \begin{itemize}
+        \item Fundamental matrix: \textbf{7 or 8 points}.
+        \item Essential matrix: \textbf{5 points}.
+    \end{itemize}
+    \item The epipolar line of a point in one image corresponds to a line in the other image.
+    \item RANSAC is used to robustly estimate $F$ or $E$.
+\end{itemize}
+
+\textbf{Recovering pose from Essential matrix:}
+\begin{itemize}
+    \item Decompose $E$ to get $R$ (rotation) and $t$ (translation) up to scale.
+    \item You get 4 solutions; use triangulation to select the physically correct one (points must be in front of both cameras).
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item If you estimate an Essential matrix from 5 point correspondences, how can you find the relative rotation and translation between the two cameras?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+def estimate_fundamental(points1, points2):
+    """Estimate Fundamental matrix using 8-point algorithm (assuming normalized points)."""
+    A = []
+    for (p1, p2) in zip(points1, points2):
+        x1, y1 = p1
+        x2, y2 = p2
+        A.append([x1*x2, x1*y2, x1, y1*x2, y1*y2, y1, x2, y2, 1])
+    A = np.array(A)
+    U, S, Vt = np.linalg.svd(A)
+    F = Vt[-1].reshape(3,3)
+    # Enforce rank-2 constraint
+    U, S, Vt = np.linalg.svd(F)
+    S[-1] = 0
+    F = U @ np.diag(S) @ Vt
+    return F
+\end{lstlisting}
+
+\newpage
+\section{Camera Calibration}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Camera calibration estimates intrinsic parameters $K$ and extrinsics $(R, t)$.
+    \item \textbf{Zhang’s method} is the most common method:
+    \begin{itemize}
+        \item Take multiple images of a flat calibration object (like a checkerboard).
+        \item Compute homographies from known 3D world points (planar) to image points.
+        \item Solve a system of equations to recover $K$.
+    \end{itemize}
+\end{itemize}
+
+\textbf{Steps of Zhang's Method:}
+\begin{enumerate}
+    \item Detect corners (features) in each image.
+    \item For each image, compute the homography $H$ between world points and image points.
+    \item Set up linear constraints to solve for intrinsic parameters.
+    \item Then recover $(R, t)$ for each view.
+    \item Optionally, refine with non-linear optimization (minimizing reprojection error).
+\end{enumerate}
+
+\textbf{Important:}
+\begin{itemize}
+    \item At least \textbf{2 views} are needed, but usually more are used.
+    \item The calibration object must lie on a plane (e.g., $Z=0$).
+    \item Skew $s$ is usually assumed to be 0.
+\end{itemize}
+
+\textbf{Homography constraints:}
+\[
+h_1 = K r_1, \quad h_2 = K r_2, \quad h_3 = K t
+\]
+where $h_i$ are the columns of the homography matrix.
+
+From this, set up constraints like:
+\[
+v_{12}^T b = 0
+\]
+where $b$ contains elements of $K^{-1}K^{-T}$.
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Why does Zhang’s method only require a flat object?
+    \item Suppose you get $K$, $R$, and $t$. How do you compute the full projection matrix?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+def compute_homography(world_points, image_points):
+    """Compute Homography H mapping world_points to image_points."""
+    A = []
+    for (X, Y), (u, v) in zip(world_points, image_points):
+        A.append([-X, -Y, -1, 0, 0, 0, u*X, u*Y, u])
+        A.append([0, 0, 0, -X, -Y, -1, v*X, v*Y, v])
+    A = np.array(A)
+    _, _, Vt = np.linalg.svd(A)
+    H = Vt[-1].reshape(3,3)
+    return H / H[-1, -1]
+
+def projection_matrix(K, R, t):
+    """Compute the full camera projection matrix P = K [R | t]."""
+    RT = np.hstack((R, t.reshape(-1, 1)))
+    return K @ RT
+\end{lstlisting}
+
+\vspace{1em}
+
+\textbf{Common mistakes to watch out for:}
+\begin{itemize}
+    \item Forgetting to normalize homographies.
+    \item Incorrectly associating world points with image points (wrong order).
+    \item Using too few images — leading to poor calibration.
+\end{itemize}
+
+\newpage
+\section{Nonlinear Optimization and Camera Calibration Refinement}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item After initial estimation of camera parameters, \textbf{nonlinear optimization} is used to refine results.
+    \item The goal is to minimize the \textbf{reprojection error}.
+    \item The typical method is \textbf{Levenberg-Marquardt optimization}.
+\end{itemize}
+
+\textbf{Reprojection Error:}
+\[
+\text{Error} = \sum_i \| p_i - \hat{p}_i \|^2
+\]
+where:
+\begin{itemize}
+    \item $p_i$ = observed image points,
+    \item $\hat{p}_i$ = projected world points using estimated camera parameters.
+\end{itemize}
+
+\textbf{Levenberg-Marquardt:}
+\begin{itemize}
+    \item Combines gradient descent and Gauss-Newton methods.
+    \item Requires the Jacobian (partial derivatives) of the reprojection error.
+\end{itemize}
+
+\textbf{Common use cases:}
+\begin{itemize}
+    \item Nonlinear triangulation (finding a 3D point from multiple views).
+    \item Bundle adjustment (refining multiple camera poses and 3D points simultaneously).
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Explain why nonlinear optimization is needed even if you have a closed-form initial estimate.
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+from scipy.optimize import least_squares
+
+def reprojection_error(X, Ps, points_2d):
+    """Compute reprojection error for a 3D point X across multiple cameras."""
+    X_h = np.append(X, 1)
+    errors = []
+    for P, pt in zip(Ps, points_2d):
+        proj = P @ X_h
+        proj = proj[:2] / proj[2]
+        errors.append(proj - pt)
+    return np.concatenate(errors)
+
+def refine_point(initial_X, Ps, points_2d):
+    """Refine 3D point with nonlinear optimization."""
+    result = least_squares(reprojection_error, initial_X, args=(Ps, points_2d))
+    return result.x
+\end{lstlisting}
+
+\newpage
+\section{Simple Features: Harris, BLOB, Difference of Gaussians (DoG)}
+
+\subsection{Harris Corner Detector}
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Finds interest points (corners) in an image.
+    \item Based on the \textbf{structure tensor} (second moment matrix):
+    \[
+    M = \begin{bmatrix}
+    I_x^2 & I_x I_y \\
+    I_x I_y & I_y^2
+    \end{bmatrix}
+    \]
+\end{itemize}
+
+\textbf{Corner response function:}
+\[
+R = \text{det}(M) - k \cdot (\text{trace}(M))^2
+\]
+where typically $k \approx 0.04$ to $0.06$.
+
+\textbf{Steps:}
+\begin{enumerate}
+    \item Compute image gradients $I_x$ and $I_y$.
+    \item Compute $I_x^2$, $I_y^2$, $I_x I_y$.
+    \item Smooth with Gaussian filter.
+    \item Calculate $R$ for each pixel.
+    \item Apply threshold and non-maximum suppression.
+\end{enumerate}
+
+\subsection{BLOB Detection}
+\textbf{Key ideas:}
+\begin{itemize}
+    \item BLOBs = regions that are brighter or darker than surroundings.
+    \item Use \textbf{Laplacian of Gaussian} (LoG) or \textbf{Difference of Gaussians} (DoG) to detect.
+    \item Non-maximum suppression across scales.
+\end{itemize}
+
+\subsection{Difference of Gaussians (DoG)}
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Approximate Laplacian of Gaussian by subtracting two blurred images:
+    \[
+    \text{DoG} = G_{\sigma_1} * I - G_{\sigma_2} * I
+    \]
+    where $G_\sigma$ is a Gaussian blur at scale $\sigma$.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Why do we prefer DoG over directly computing the Laplacian?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import cv2
+
+def harris_corner_detector(image, k=0.04, threshold=1e-5):
+    """Detect Harris corners in a grayscale image."""
+    Ix = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+    Iy = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    Ixx = cv2.GaussianBlur(Ix**2, (5,5), sigmaX=1)
+    Iyy = cv2.GaussianBlur(Iy**2, (5,5), sigmaX=1)
+    Ixy = cv2.GaussianBlur(Ix*Iy, (5,5), sigmaX=1)
+    
+    det = Ixx * Iyy - Ixy**2
+    trace = Ixx + Iyy
+    R = det - k * trace**2
+    
+    corners = (R > threshold)
+    return corners
+\end{lstlisting}
+
+\newpage
+\section{Robust Model Fitting: RANSAC}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item \textbf{RANSAC} = RANdom SAmple Consensus.
+    \item Used to robustly estimate models (like Fundamental matrix, Homography) despite outliers.
+\end{itemize}
+
+\textbf{RANSAC Algorithm:}
+\begin{enumerate}
+    \item Randomly sample minimal points needed to estimate the model.
+    \item Fit a model to the sample.
+    \item Count inliers: points that fit the model within a threshold.
+    \item Keep the model with the most inliers.
+    \item Refit the model using all inliers (optional).
+\end{enumerate}
+
+\textbf{How many iterations?}
+\[
+N = \frac{\log(1 - p)}{\log(1 - w^s)}
+\]
+where:
+\begin{itemize}
+    \item $p$ = desired probability (e.g., 0.95),
+    \item $w$ = probability a random point is an inlier,
+    \item $s$ = number of points needed to estimate the model.
+\end{itemize}
+
+\textbf{Threshold selection:}
+\begin{itemize}
+    \item If measurement noise is Gaussian with std $\sigma$, set threshold $\tau$ based on $\sigma$ (e.g., $3\sigma$).
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item If you expect 50\% of points are inliers, and you need 8 points to estimate a Fundamental matrix, how many iterations do you need to be 99\% confident?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import random
+
+def ransac(data, model_fn, error_fn, sample_size, threshold, max_trials=1000):
+    """Basic RANSAC loop."""
+    best_model = None
+    best_inliers = []
+    for _ in range(max_trials):
+        sample = random.sample(data, sample_size)
+        model = model_fn(sample)
+        inliers = []
+        for point in data:
+            if error_fn(model, point) < threshold:
+                inliers.append(point)
+        if len(inliers) > len(best_inliers):
+            best_model = model
+            best_inliers = inliers
+    return best_model, best_inliers
+\end{lstlisting}
+
+\newpage
+\section{Transform Invariant Features: SIFT}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item \textbf{SIFT} = Scale-Invariant Feature Transform.
+    \item Detects and describes local features that are invariant to:
+    \begin{itemize}
+        \item Scale,
+        \item Rotation,
+        \item Small affine transformations,
+        \item Illumination changes.
+    \end{itemize}
+\end{itemize}
+
+\textbf{SIFT steps:}
+\begin{enumerate}
+    \item Build scale-space: blur image with Gaussians at different scales.
+    \item Compute Difference of Gaussians (DoG).
+    \item Find keypoints: local extrema in space and scale.
+    \item Assign orientation(s) to keypoints.
+    \item Extract descriptor: histograms of gradient orientations.
+\end{enumerate}
+
+\textbf{Descriptor normalization:}
+\begin{itemize}
+    \item The descriptor vector is normalized to unit length.
+    \item Clipped to reduce influence of large gradients, then normalized again.
+\end{itemize}
+
+\textbf{RootSIFT:}
+\begin{itemize}
+    \item Apply $\ell_1$ normalization + take square root of each element.
+    \item Better matching performance under different illumination.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item What properties make SIFT robust to rotation?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import cv2
+
+def compute_sift_keypoints_and_descriptors(image):
+    """Compute SIFT keypoints and descriptors."""
+    sift = cv2.SIFT_create()
+    keypoints, descriptors = sift.detectAndCompute(image, None)
+    return keypoints, descriptors
+
+def match_descriptors(des1, des2, ratio=0.8):
+    """Match descriptors with Lowe's ratio test."""
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(des1, des2, k=2)
+    good = []
+    for m, n in matches:
+        if m.distance < ratio * n.distance:
+            good.append(m)
+    return good
+\end{lstlisting}
+
+\newpage
+\section{Geometry Constrained Feature Matching}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item After detecting features, \textbf{geometry constraints} can be used to reject bad matches.
+    \item The two main tools are:
+    \begin{itemize}
+        \item \textbf{Fundamental matrix} ($F$): enforces epipolar geometry for uncalibrated cameras.
+        \item \textbf{Essential matrix} ($E$): used when camera intrinsics are known.
+    \end{itemize}
+\end{itemize}
+
+\textbf{Process:}
+\begin{enumerate}
+    \item Detect features and match descriptors (e.g., SIFT, RootSIFT).
+    \item Use RANSAC to estimate $F$ or $E$ robustly.
+    \item Remove matches that do not satisfy the epipolar constraint:
+    \[
+    p_2^T F p_1 = 0
+    \]
+\end{enumerate}
+
+\textbf{Epipolar constraint:}
+\begin{itemize}
+    \item Given a point in image 1, its corresponding point must lie on the epipolar line in image 2.
+    \item Distance from a point to the epipolar line can be used to check validity of a match.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Given $p_1$ and $F$, how would you compute the epipolar line in image 2?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+def compute_epipolar_line(F, p1):
+    """Compute epipolar line in the second image for point p1 in first image."""
+    p1_h = np.append(p1, 1)
+    line = F @ p1_h
+    return line  # line parameters (a, b, c) where ax + by + c = 0
+
+def distance_point_to_line(line, point):
+    """Compute distance from a point to a line."""
+    a, b, c = line
+    x, y = point
+    return abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
+\end{lstlisting}
+
+\newpage
+\section{Image Stitching}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Combine multiple images into a larger panorama.
+    \item Requires feature matching, geometric alignment (homographies), and blending.
+\end{itemize}
+
+\textbf{Steps for stitching:}
+\begin{enumerate}
+    \item Detect and match features between images.
+    \item Estimate a \textbf{homography} $H$ between images.
+    \item Warp one image into the other's coordinate system.
+    \item Blend the images together smoothly (e.g., linear blending, multi-band blending).
+\end{enumerate}
+
+\textbf{Homography estimation:}
+\begin{itemize}
+    \item Minimum of 4 correspondences needed.
+    \item Use RANSAC to estimate $H$ robustly.
+\end{itemize}
+
+\textbf{Warping:}
+\begin{itemize}
+    \item Transform all points in the source image using $H$.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Why is a homography sufficient for stitching when the scene is planar or when the camera rotates around its optical center?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import cv2
+
+def stitch_images(img1, img2):
+    """Basic image stitching pipeline."""
+    sift = cv2.SIFT_create()
+    kp1, des1 = sift.detectAndCompute(img1, None)
+    kp2, des2 = sift.detectAndCompute(img2, None)
+    
+    matcher = cv2.BFMatcher()
+    matches = matcher.knnMatch(des1, des2, k=2)
+    
+    good = []
+    for m, n in matches:
+        if m.distance < 0.8 * n.distance:
+            good.append(m)
+    
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1,1,2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1,1,2)
+    
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    
+    result = cv2.warpPerspective(img1, H, 
+        (img1.shape[1] + img2.shape[1], img1.shape[0]))
+    result[0:img2.shape[0], 0:img2.shape[1]] = img2
+    return result
+\end{lstlisting}
+
+\newpage
+\section{Motion Estimation}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Motion estimation finds how the camera moves between frames.
+    \item Assuming a static scene, motion can be estimated from point correspondences.
+\end{itemize}
+
+\textbf{Two main approaches:}
+\begin{itemize}
+    \item Estimate \textbf{Essential matrix} (if intrinsics known).
+    \item Estimate \textbf{Fundamental matrix} (if intrinsics unknown).
+\end{itemize}
+
+\textbf{Pipeline for Motion Estimation:}
+\begin{enumerate}
+    \item Detect and match features between frames.
+    \item Use RANSAC to estimate $F$ or $E$.
+    \item Decompose $E$ into possible $(R, t)$.
+    \item Choose correct $(R, t)$ via triangulation (cheirality check: points must be in front of both cameras).
+\end{enumerate}
+
+\textbf{Special case: pure rotation}
+\begin{itemize}
+    \item If the camera rotates around its center, the transformation is a homography instead of an essential matrix.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item If you know $E$, how many possible decompositions into $(R, t)$ exist? How do you resolve ambiguity?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import cv2
+
+def estimate_motion(K, points1, points2):
+    """Estimate relative camera motion from two sets of points."""
+    E, mask = cv2.findEssentialMat(points1, points2, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+    _, R, t, mask = cv2.recoverPose(E, points1, points2, K)
+    return R, t
+\end{lstlisting}
+
+\newpage
+\section{Structured Light}
+
+\textbf{Key ideas:}
+\begin{itemize}
+    \item Structured light systems project a known pattern onto a scene.
+    \item The distortion of the pattern reveals depth information.
+\end{itemize}
+
+\textbf{Phase Shifting Technique:}
+\begin{itemize}
+    \item Project sinusoidal patterns with known frequencies.
+    \item Record multiple images at different phase shifts.
+    \item Compute the phase at each pixel.
+\end{itemize}
+
+\textbf{Phase calculation:}
+\[
+I(x) = A(x) + B(x) \cos(\phi(x))
+\]
+where $I(x)$ is the observed intensity at pixel $x$.
+
+Using multiple shifted patterns, solve for $\phi(x)$ (the phase).
+
+\textbf{Unwrapping phase:}
+\begin{itemize}
+    \item The raw phase is ambiguous modulo $2\pi$.
+    \item Techniques like multi-frequency patterns are used to unwrap phase and recover full depth.
+\end{itemize}
+
+\textbf{Mini exercise:}
+\begin{itemize}
+    \item Why do we need both primary and secondary patterns in phase unwrapping?
+\end{itemize}
+
+\vspace{1em}
+
+\textbf{Example Code:}
+\begin{lstlisting}[language=Python]
+import numpy as np
+
+def compute_wrapped_phase(images):
+    """Compute the wrapped phase from 3 phase-shifted images."""
+    I1, I2, I3 = images
+    numerator = np.sqrt(3) * (I1 - I3)
+    denominator = 2*I2 - I1 - I3
+    wrapped_phase = np.arctan2(numerator, denominator)
+    return wrapped_phase
+\end{lstlisting}
+
+\vspace{1em}
+
+\textbf{Important:}
+\begin{itemize}
+    \item Structured light gives very accurate 3D reconstructions at short to medium distances.
+    \item Sensitive to ambient light and occlusions.
+\end{itemize}
+
+\newpage
+\section{Cheat Sheet}
+
+\begin{itemize}
+    \item \textbf{Minimum points:}
+        \begin{itemize}
+            \item Fundamental matrix: 7 or 8
+            \item Essential matrix: 5
+            \item Homography: 4
+        \end{itemize}
+    \item \textbf{Corner detection:}
+        \begin{itemize}
+            \item Harris: $R = \text{det}(M) - k \cdot (\text{trace}(M))^2$
+        \end{itemize}
+    \item \textbf{Triangulation:}
+        \begin{itemize}
+            \item Linear triangulation: SVD
+            \item Nonlinear triangulation: Levenberg-Marquardt
+        \end{itemize}
+    \item \textbf{Important matrices:}
+        \begin{itemize}
+            \item $E = K_2^T F K_1$
+        \end{itemize}
+\end{itemize}
+
+
+
+\end{document}
