@@ -1,7 +1,7 @@
 import sympy as sp
 import cv2
 import numpy as np
-from modules.functions import *
+from functions.functions import *
 
 # hyperparameters
 # f = 600
