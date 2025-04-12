@@ -865,3 +865,89 @@ def detectBlobs(
         for j in range(len(x)):
             blobs.append((x[j], y[j], sigma_i * np.sqrt(2)))
     return blobs
+
+
+def ransac_homography(
+    pts1: np.ndarray, pts2: np.ndarray, num_iterations: int = 200, sigma: float = 3.0
+) -> tuple[np.ndarray, NumPyArrayFloat32]:
+    """
+    Estimates the best homography matrix between two sets of points using RANSAC.
+
+    Args:
+        pts1 (np.ndarray): Source points of shape (N, 2).
+        pts2 (np.ndarray): Destination points of shape (N, 2).
+        num_iterations (int, optional): Number of RANSAC iterations. Defaults to 200.
+        sigma (float, optional): Standard deviation for inlier thresholding. Defaults to 3.0.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: A tuple containing:
+            - best_H (np.ndarray): Estimated 3x3 homography matrix.
+            - best_inliers (np.ndarray): Indices of inlier points used for the final model.
+    """
+    best_inliers = []
+    best_H = None
+
+    threshold = 5.99 * sigma**2  # chi-squared threshold for 2 DOF (approx)
+
+    for i in range(num_iterations):
+        # 1. Randomly select 4 points
+        idx = random.sample(range(len(pts1)), 4)
+        src_pts = pts1[idx]
+        dst_pts = pts2[idx]
+
+        # 2. Compute Homography
+        H, _ = cv2.findHomography(
+            src_pts, dst_pts, method=0
+        )  # 0 means no RANSAC inside
+
+        if H is None:
+            continue
+
+        # 3. Transform all pts1 using H
+        pts1_homog = np.hstack(
+            [pts1, np.ones((pts1.shape[0], 1))]
+        )  # make homogeneous coords
+        pts2_proj = (H @ pts1_homog.T).T
+
+        # Normalize projected points
+        pts2_proj = pts2_proj[:, :2] / pts2_proj[:, 2, np.newaxis]
+
+        # 4. Compute error
+        errors = np.sum((pts2_proj - pts2) ** 2, axis=1)  # squared distance
+
+        # 5. Determine inliers
+        inliers = np.where(errors < threshold)[0]
+
+        # 6. Keep best model
+        if len(inliers) > len(best_inliers):
+            best_inliers = inliers
+            best_H = H
+
+    return (best_H, best_inliers)
+
+
+def warpImage(
+    im: np.ndarray, H: np.ndarray, xRange: tuple[int, int], yRange: tuple[int, int]
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Warps an input image into a new coordinate frame defined by a homography and output ranges.
+
+    Args:
+        im (np.ndarray): Input image.
+        H (np.ndarray): 3x3 homography matrix.
+        xRange (tuple[int, int]): Output x-coordinate range (min_x, max_x).
+        yRange (tuple[int, int]): Output y-coordinate range (min_y, max_y).
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: A tuple containing:
+            - imWarp (np.ndarray): Warped image.
+            - maskWarp (np.ndarray): Warped binary mask indicating valid pixels.
+    """
+    T = np.eye(3)
+    T[:2, 2] = [-xRange[0], -yRange[0]]
+    H = T @ H
+    outSize = (xRange[1] - xRange[0], yRange[1] - yRange[0])
+    mask = np.ones(im.shape[:2], dtype=np.uint8) * 255
+    imWarp = cv2.warpPerspective(im, H, outSize)
+    maskWarp = cv2.warpPerspective(mask, H, outSize)
+    return imWarp, maskWarp
