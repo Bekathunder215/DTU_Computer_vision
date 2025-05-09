@@ -130,7 +130,7 @@ def project_points_with_Proj_matrix(
 
     Args:
         P (np.ndarray): Projection matrix of shape (3, 4).
-        Q (np.ndarray): 3D points of shape (3, N).
+        Q (np.ndarray): Homegeneous 3D points of shape (4, N).
         dist (float): Distortion parameter (currently unused).
 
     Returns:
@@ -426,6 +426,12 @@ def point_line_distance(L: np.ndarray, p2: np.ndarray) -> float:
 
     Returns:
     - Distance (float).
+
+    HOW TO COMPUTE THE DISTANCE:
+    fundamental matrixes with 3 points and 3 cameras
+    F12, F13, F23
+    Line = F12 @ to_homogeneous(p1)
+
     """
     a, b, c = L
     x2, y2 = p2
@@ -441,7 +447,12 @@ def triangulate(pointlist: np.ndarray, Projlist: np.ndarray) -> np.ndarray:
         Projlist (np.ndarray): Array of 3x4 camera projection matrices, with shape (n, 3, 4).
 
     Returns:
-        np.ndarray: The triangulated 3D points in homogeneous coordinates, with shape (n, 3).
+        np.ndarray: The triangulated 3D points in homogeneous coordinates, with shape (n, 4).
+
+    HOW TO DO:
+    projectedpoints are 2D points in the image plane no homogeneous
+    Projlist is a list of projection matrices
+    use triangulate function to get the 3D points
     """
 
     # Ensure correct input shapes
