@@ -1,4 +1,5 @@
 import itertools as it
+import random
 
 import cv2
 import matplotlib.pyplot as plt
@@ -207,6 +208,35 @@ def plot_3d(dpoints: np.ndarray, i: int = 0) -> None:
     plt.show()
 
 
+def undistort_point(x_d: np.ndarray, K: np.ndarray, distCoeff: list) -> np.ndarray:
+    """
+    Undistorts a 2D point using the intrinsic matrix and distortion coefficients.
+
+    Args:
+        x_d (np.ndarray): 2D distorted image point (shape: [2,] or [2,1]).
+        K (np.ndarray): Intrinsic camera matrix.
+        distCoeff (list): Distortion coefficients.
+
+    Returns:
+        np.ndarray: Undistorted 2D point (shape: [2,]).
+    """
+    # Ensure x_d is [2,]
+    x_d = np.asarray(x_d).flatten()
+
+    # Convert to homogeneous
+    x_d_h = PiInv(x_d.reshape(2, 1))  # shape: (3,)
+
+    # Normalize
+    q = np.linalg.inv(K) @ x_d_h  # shape: (3,)
+    q_h = PiInv(q[:2].reshape(2, 1))  # remove last element
+
+    # Back to pixel space
+    x_u_h = K @ q_h  # undistorted homogeneous
+    x_u = Pi(x_u_h)  # 2D undistorted point
+
+    return x_u.flatten()
+
+
 def undistortImage(
     im: np.ndarray,
     K: np.ndarray = np.array([[f, b * f, dx], [0, a * f, dy], [0, 0, 1]]),
@@ -261,6 +291,74 @@ def homography(
     """
     homlist = [PiInv(i) for i in pointlist]
     return [Pi(H @ i) for i in homlist]
+
+
+def hest_stolen(q1, q2, normalize=False):
+    if normalize:
+        q1, T1 = normalize2d(q1)
+        q2, T2 = normalize2d(q2)
+    B = []
+    q1 = PiInv(q1)
+    q2 = PiInv(q2)
+    for i in range(q1.shape[1]):
+        q1ix = CrossOp(np.expand_dims(q1[:, i], axis=0))
+        q2i = np.expand_dims(q2[:, i], axis=0)
+        B.append(np.kron(q2i, q1ix))
+    B = np.vstack(B)
+    U, S, VT = np.linalg.svd(B)
+    H_flat = np.expand_dims(VT[-1], axis=0)
+    H = H_flat.reshape((3, 3)).T
+    if normalize:
+        return np.linalg.inv(T1) @ H @ T2
+    else:
+        return H
+
+
+def hest_with_numpy(
+    pointlist: np.ndarray,
+    dest: np.ndarray,
+    normalize: bool = False,
+) -> np.ndarray:
+    """
+    Estimates the homography matrix using the linear DLT algorithm.
+
+    Args:
+        pointlist (np.ndarray, optional): 2xN array of source points in homogeneous coordinates.
+        dest (np.ndarray, optional): 2xN array of destination points in homogeneous coordinates.
+        normalize (bool, optional): Whether to normalize the points before computing the homography. Default is False.
+
+    Returns:
+        np.ndarray: The 3x3 estimated homography matrix.
+    """
+    if normalize:
+        T1, src_pts = normalize2d_numpy(pointlist)
+        T2, dst_pts = normalize2d_numpy(dest)
+    else:
+        src_pts = pointlist
+        dst_pts = dest
+
+    B = []
+    for i in range(src_pts.shape[1]):
+        # x, y = src_pts[:, i]
+        x, y = src_pts[0, i], src_pts[1, i]
+        # xp, yp = dst_pts[:, i]
+        xp, yp = dst_pts[0, i], dst_pts[1, i]
+        B.append([-x, -y, -1, 0, 0, 0, x * xp, y * xp, xp])
+        B.append([0, 0, 0, -x, -y, -1, x * yp, y * yp, yp])
+
+    B = np.array(B)
+
+    # Compute SVD
+    _, _, VT = np.linalg.svd(B)
+    h = VT[-1]  # Smallest singular vector
+    # h = VT[-1, :]  # Smallest singular vector
+
+    H = h.reshape(3, 3)
+
+    if normalize:
+        H = np.linalg.inv(T2) @ H @ T1
+
+    return H
 
 
 def hest(
@@ -318,6 +416,45 @@ def hest(
         H = np.linalg.inv(T2) @ H @ T1
 
     return H
+
+
+def normalize2d_numpy(points: np.ndarray) -> tuple:
+    """
+    Normalizes a set of 2D points so that their mean is (0,0) and standard deviation is (1,1).
+
+    Args:
+        points (np.ndarray): 2xN array of 2D points.
+
+    Returns:
+        tuple: A tuple containing the normalization matrix T and the normalized 2xN points.
+    """
+    assert points.shape[0] == 2, "Input should be a 2xN array"
+
+    # Compute mean and std deviation for each axis
+    mean = np.mean(points, axis=1, keepdims=True)
+    std_dev = np.std(points, axis=1, keepdims=True)
+
+    std_dev[std_dev == 0] = 1  # Prevent division by zero
+
+    # Normalization matrix
+    T = np.array(
+        [
+            [1 / std_dev[0, 0], 0, -mean[0, 0] / std_dev[0, 0]],
+            [0, 1 / std_dev[1, 0], -mean[1, 0] / std_dev[1, 0]],
+            [0, 0, 1],
+        ]
+    )
+
+    # Convert to homogeneous coordinates
+    points_hom = np.vstack((points, np.ones((1, points.shape[1]))))  # (3, N)
+
+    # Apply normalization
+    normalized_points_hom = T @ points_hom  # (3, N)
+
+    # Convert back to inhomogeneous coordinates
+    normalized_points = normalized_points_hom[:2, :] / normalized_points_hom[2, :]
+
+    return T, normalized_points
 
 
 def normalize2d(points: list) -> tuple:
@@ -704,6 +841,7 @@ def gaussianSmoothing(
     Iy = cv2.sepFilter2D(im, -1, g.T, gd)
     return I, Ix, Iy
 
+
 def structureTensor(im: MatLike, sigma: float, epsilon: float) -> np.ndarray:
     """
     Computes the structure tensor for an image.
@@ -788,7 +926,9 @@ def cornerDetector(im, sigma, epsilon, k, tau):
     return np.where(r >= tau, r, r >= tau)
 
 
-def cornerDetector_withcv2(im: MatLike, sigma: float, epsilon: float, k: float, tau: float) -> np.ndarray:
+def cornerDetector_withcv2(
+    im: MatLike, sigma: float, epsilon: float, k: float, tau: float
+) -> np.ndarray:
     """
     Detects corners in an image using the Harris corner detection method.
 
@@ -802,18 +942,19 @@ def cornerDetector_withcv2(im: MatLike, sigma: float, epsilon: float, k: float, 
     Returns:
         np.ndarray: Array of corner coordinates as (x, y).
     """
-    #Changes:
+    # Changes:
     # Non-Maximum Suppression: Simplified using cv2.dilate for clarity and efficiency.
     # Return Format: Changed to return corner coordinates as (x, y) for consistency with common conventions.
     # Compute Harris response
     r = harrisMeasure(im, sigma, epsilon, k)
 
     # Non-maximum suppression
-    local_max = (r == cv2.dilate(r, np.ones((3, 3))))
+    local_max = r == cv2.dilate(r, np.ones((3, 3)))
     corners = np.argwhere((r > tau) & local_max)
 
     # Return as (x, y) coordinates
     return corners[:, [1, 0]]  # Swap to (x, y) format
+
 
 def scaleSpaced(im: MatLike, sigma: int, n: int) -> list[np.ndarray]:
     """
@@ -915,6 +1056,7 @@ def detectBlobs(
             blobs.append((x[j], y[j], sigma_i * np.sqrt(2)))
     return blobs
 
+
 def detectBlobs_withcv2(
     im: MatLike, sigma: float, n: int, tau: float
 ) -> list[tuple[int, int, float]]:
@@ -940,11 +1082,11 @@ def detectBlobs_withcv2(
     blobs = []
     for i, dog in enumerate(dog_images):
         # Non-maximum suppression
-        local_max = (dog == cv2.dilate(dog, np.ones((3, 3))))
+        local_max = dog == cv2.dilate(dog, np.ones((3, 3)))
         candidates = np.argwhere((dog > tau) & local_max)
 
         # Compute radius for each scale
-        radius = sigma * (2 ** i) * np.sqrt(2)
+        radius = sigma * (2**i) * np.sqrt(2)
         for y, x in candidates:
             blobs.append((x, y, radius))
 
@@ -1010,6 +1152,7 @@ def ransac_homography(
             best_H = H
 
     return (best_H, best_inliers)
+
 
 def ransac_homography_with_copilot(
     pts1: np.ndarray, pts2: np.ndarray, num_iterations: int = 200, sigma: float = 3.0
