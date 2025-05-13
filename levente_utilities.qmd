@@ -1,0 +1,454 @@
+```{python}
+def p_i(points):
+    return points[:-1]/ points[-1] 
+
+def p_i_inverse(points):
+    _, n = points.shape
+    return np.vstack((points, np.ones(n)))
+```
+
+```{python}
+def distance_from_line(l, p, homo=True):
+	l = l / np.sqrt(l[0]**2 + l[1]**2)
+	p = p_i_inverse(p) if not homo else p
+	p = p / p[-1] # to make sure scale is 1
+
+	assert a**2 + b**2 - 1 < 10**4
+	return l.T@p
+
+```
+
+```{python}
+def projectpoints(K, R, t, Q):
+    R_t = np.hstack((R, t))
+    return K @ R_t @ Q
+```
+
+Distorted projection / Undistortion
+
+```{python}
+def delta_r(r, dist_coeffs):
+    return np.sum([ c * r ** (idx+2) for idx, c in enumerate(dist_coeffs)])
+
+def p(norms, dist_coeffs):
+    return np.array([delta_r(v, dist_coeffs) for v in norms])
+
+def dist_poly(M, dist_coeffs):
+    norms = 1 + p(np.linalg.norm(M, axis=0), dist_coeffs)
+    norm_matrix = np.tile(norms, (2, 1))
+    return np.multiply(M, norm_matrix)
+
+def projectpoints_dist(K, R, t, Q, dist_coeffs):
+    R_t = np.hstack((R, t))
+    return K @ p_i_inverse(dist_poly(p_i(R_t @ Q), dist_coeffs))
+```
+
+```{python}
+def read_opencv_img(name):
+	return cv2.imread(name)[:,:,::-1]
+```
+
+```{python}
+import cv2
+import numpy as np
+
+dist_coeffs = [-0.245031, 0.071524, -0.00994978]
+
+def undistort_image(im, K, dist_coeffs):
+    x, y = np.meshgrid(np.arange(im.shape[1]), np.arange(im.shape[0]))
+    p = np.stack((x, y, np.ones(x.shape))).reshape(3, -1)
+
+    p_d = K @ p_i_inverse( dist_poly( p_i( np.linalg.inv(K) @ p ),  dist_coeffs) ) 
+    x_d = p_d[0].reshape(x.shape).astype(np.float32)
+    y_d = p_d[1].reshape(y.shape).astype(np.float32)
+    assert (p_d[2]==1).all(), 'You did a mistake somewhere'
+    return cv2.remap(im, x_d, y_d, cv2.INTER_LINEAR)
+```
+
+Homographies
+
+
+```{python}
+def normalize2d(points):
+    mu = np.mean(points, axis=1)
+    sigma = np.std(points, axis=1)
+    T_inv = np.array([[sigma[0], 0 , mu[0]],
+		      [0, sigma[1], mu[1]],
+		      [0, 0 ,1]])
+    T = np.linalg.inv(T_inv)
+    return T, p_i(T @ p_i_inverse(points))
+
+def hest(q1: np.ndarray, q2: np.ndarray, normalize: bool = False):
+    if normalize:
+        T1, src_pts = normalize2d(q1)
+        T2, dst_pts = normalize2d(q2)
+    else:
+        src_pts = q1
+        dst_pts = q2
+
+    N = src_pts.shape[1]
+    B = np.zeros((2*N, 9))
+
+    for i in range(N):
+        x, y = src_pts[:, i]
+        xp, yp = dst_pts[:, i]
+        
+        B[2*i] = [-x, -y, -1, 0, 0, 0, x*xp, y*xp, xp]
+        B[2*i+1] = [0, 0, 0, -x, -y, -1, x*yp, y*yp, yp]
+
+    # Solve using SVD (last row of V^T)
+    _, _, VT = np.linalg.svd(B)
+    H = VT[-1].reshape(3, 3)
+
+    if normalize:
+        # Denormalize: H = T2^{-1} @ H_norm @ T1
+        H = np.linalg.inv(T2) @ H @ T1
+
+    return H   # Normalize by last element
+```
+
+Week 3 
+
+```{python}
+def cross_op(p):
+	res = np.zeros((3,3))
+	res[0,1] = -p[2]
+	res[0,2] = p[1]
+	res[1,0] = p[2]
+	res[1,2] = -p[0]
+	res[2,0] = -p[1]
+	res[2,1] = p[0]
+	return res
+```
+
+
+```{python}
+def compute_essential(R, t):
+	return cross_op(t) @ R
+```
+
+```{python}
+def compute_fundamental(R, t, K_1, K_2):
+	E = compute_essential(R, t)
+	return np.linalg.inv(K_2).T @ E  @ np.linalg.inv(K_1)
+```
+
+```{python}
+def epipolar_through_point(q, F):
+	return F @ q
+```
+
+
+```{python}
+def triangulate(pixel_coords, proj_matrices):
+    assert len(pixel_coords) == len(proj_matrices)
+    N = len(pixel_coords)
+
+    B = np.zeros((2*N, 4))
+
+    for i in range(N):
+        B[2*i: (2*i)+2, :] = (pixel_coords[i] * proj_matrices[i][2, :])  - proj_matrices[i][:2,:]
+
+    _, S, VT = np.linalg.svd(B)
+
+    smallest_idx = np.argmin(S)
+
+    V = VT.T
+    smallest_eigenvector = V[:, smallest_idx]
+
+    return smallest_eigenvector
+```
+
+Week 4 - Camera calibration and estimation
+
+```{python}
+def p_est(Q, q):
+    n_points = Q.shape[1]
+    
+    Q = p_i_inverse(Q)
+    B = np.zeros((n_points*3, 12))
+    
+    x_1_i = q[0, :]
+    y_1_i = q[1, :]
+    helper_matrices = np.zeros((3, 3, n_points))
+    helper_matrices[0, 1, :] = -1
+    helper_matrices[0, 2, :] = y_1_i  # y values
+    helper_matrices[1, 0, :] = 1
+    helper_matrices[1, 2, :] = -x_1_i  # -x values
+    helper_matrices[2, 0, :] = -y_1_i  # -y values
+    helper_matrices[2, 1, :] = x_1_i
+
+    for i in range(n_points):
+        B[3*i:3*(i+1), :] =  np.kron(Q[:, i], helper_matrices[:,:,i])
+    
+    _, _, VT = np.linalg.svd(B)
+    return VT[-1, :].reshape((4,3)).T
+```
+
+```{python}
+def estimate_homographies(Q_omega, qs):
+    # for this exercise z=0
+    Q_omega = Q_omega[:2,:]
+    res = []
+    for i in range(len(qs)):
+        res.append( hest(qs[i], Q_omega) )
+    return res
+```
+
+```{python}
+def construct_v(H, alpha, beta):
+        res = np.zeros(6)
+        res[0] = H[0,alpha] * H[0,beta]
+        res[1] = H[0,alpha] * H[1,beta] + H[1,alpha] * H[0,beta] 
+        res[2] = H[1,alpha] * H[1,beta]
+        res[3] = H[2,alpha] * H[0,beta] + H[0,alpha] * H[2,beta]
+        res[4] = H[2,alpha] * H[1,beta] + H[1,alpha] * H[2,beta]
+        res[5] = H[2,alpha] * H[2,beta]
+        return res
+
+def estimate_b(Hs):
+    N = len(Hs)
+    V = np.zeros((2*N, 6))  
+
+    for i in range(N):
+        v_12 = construct_v(Hs[i],0,1)
+        v_11 = construct_v(Hs[i],0,0)
+        v_22 = construct_v(Hs[i],1,1)
+        diff = v_11 - v_22
+    
+        V[2*i:2*i+2] = np.vstack((v_12, diff))
+
+    _, _, VT = np.linalg.svd(V)
+    b = VT[-1, :]
+    return b
+```
+
+```{python}
+def estimate_intrinsics(Hs):
+    b = estimate_b(Hs) # [ B_11, B_12, B_22, B_13, B_23, B_33]
+    v0 = (b[1]*b[3] - b[0]*b[4])/ (b[0]*b[2] - b[1]**2)
+    lmbda = b[5] - (b[3]**2 + v0 * ( b[1]*b[3] - b[0]*b[4] )) / b[0]
+    alpha = np.sqrt( lmbda / b[0])
+    beta = np.sqrt(lmbda*b[0]/ (  b[0] * b[2] - b[1]**2 ))
+    gamma = - b[1] * alpha**2 * beta / lmbda
+    u0 = gamma * v0 / beta - b[3] * alpha**2 / lmbda
+
+    K = np.array([[alpha, gamma, u0],
+                  [0, beta, v0],
+                  [0, 0, 1]])
+    return K
+```
+
+```{python}
+def estimate_extrinsics(K, Hs):
+    Rs = []
+    ts = []
+    for H in Hs:
+        K_inv = np.linalg.inv(K)
+        h1 = H[:,0].reshape(-1,1)
+        h2 = H[:,1].reshape(-1,1)
+        h3 = H[:, 2].reshape(-1,1)
+        
+        lmbda = 1/ np.linalg.norm( K_inv @ h1 )
+        r1 = lmbda * K_inv @ h1
+        r2 = lmbda * K_inv @ h2
+        r3 = np.cross(r1.reshape(3), r2.reshape(3)).reshape(-1,1)
+        t = lmbda * K_inv @ h3
+        
+        Rs.append( np.hstack((r1, r2, r3)) ) 
+        ts.append(t)
+    return Rs, ts
+```
+
+```{python}
+def calibrate_camera(qs, Q):
+    Hs = estimate_homographies(Q, qs)
+    K = estimate_intrinsics(Hs)
+    Rs, ts = estimate_extrinsics(K, Hs)
+    return K, Rs, ts
+```
+
+
+Week 5
+
+```{python}
+import scipy
+
+def triangulate_nonlin(pixel_coords, proj_matrices):
+    N = len(pixel_coords)
+    proj_stacked = np.vstack(proj_matrices)
+    coords_stacked = np.hstack(pixel_coords)
+
+    def compute_residuals(Q):
+        residuals = np.zeros(2 * N)
+        for i in range(N):
+            residuals[2*i: (2*i)+2] = (p_i(proj_matrices[i] @ Q).reshape(-1,1) - pixel_coords[i]).flatten()
+        return residuals
+    
+    x0 = triangulate(pixel_coords, proj_matrices).reshape(4)
+    return scipy.optimize.least_squares(compute_residuals, x0).x.reshape(4,1)
+```
+
+Week 6 - Blobs
+
+```{python}
+import cv2
+from scipy.ndimage import convolve
+from skimage import io
+import numpy as np
+from matplotlib import pyplot as plt
+
+def gaussian1DKernel(sigma):
+    t = sigma**2
+    r = np.ceil(4 * sigma)
+    x = np.arange(-r, r + 1).reshape(-1, 1)
+    g = np.exp(-x**2 / (2 * t))
+    g = g/np.sum(g)
+    gd = -x * g / t 
+    return g, gd
+```
+
+
+```{python}
+def gaussian_smoothing(im, sigma):
+	im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(float) 
+	g, gd = gaussian1DKernel(sigma)
+	I = cv2.sepFilter2D(im_gray, -1, g.T, g)
+	Ix = cv2.sepFilter2D(im_gray, -1, gd.T, g)
+	Iy = cv2.sepFilter2D(im_gray, -1, g.T, gd)
+	return I, Ix,Iy
+```
+
+```{python}
+def structure_tensor(im, sigma, epsilon):
+    I, Ix, Iy = gaussian_smoothing(im, sigma)
+    g_eps, _ = gaussian1DKernel(epsilon)
+
+    c_11 = convolve(Ix**2, g_eps)    
+    c_rest = convolve(np.multiply(Ix,Iy), g_eps)
+    c_22 = convolve(Iy**2, g_eps)    
+    return c_11, c_rest, c_22
+```
+
+```{python}
+def harris_measure(im, sigma, epsilon, k):
+    a, c, b = structure_tensor(im, sigma, epsilon)
+    return np.multiply(a,b) - c**2 - k * (a + b) ** 2
+```
+
+```{python}
+def corner_detector(im, sigma, epsilon, k, tau):
+    r = harris_measure(im, sigma, epsilon, k)
+    
+    def non_maximum_suppression(r):
+        # Pad the array with -inf to handle edge cases
+        padded = np.pad(r, pad_width=1, mode="constant", constant_values=-np.inf)
+
+        # Compare each pixel with its left, right, top, and bottom neighbors
+        is_max = (
+            (r > padded[1:-1, :-2])
+            & (r > padded[1:-1, 2:])
+            & (r > padded[:-2, 1:-1])
+            & (r > padded[2:, 1:-1])
+        )
+
+        # Create a suppressed version where only local maxima are kept
+        suppressed = np.where(is_max, r, 0)
+
+        return suppressed
+
+    r = non_maximum_suppression(r)
+
+    return np.where(r >= tau, r, r>= tau)
+```
+
+Week 7 - Ransac + hough space
+
+
+```{python}
+import skimage
+img = cv2.imread('Box3.bmp')
+gray = cv2.cvtColor(img, cv.COLOR_BGR2GRAY)
+blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+print(np.min(blurred))
+print(np.max(blurred))
+lower_t = 60
+upper_t = 250
+edges = cv2.Canny(blurred, lower_t, upper_t)
+plt.imshow(edges)
+plt.show()
+```
+
+7.2
+```{python}
+hspace, angles, dists = skimage.transform.hough_line(edges)
+```
+
+
+```{python}
+def fit_line_homogeneous(p1, p2):
+	return np.cross(p1, p2)
+```
+
+
+```{python}
+def classify_points(points, line, threshold):
+	a, b, c = line
+	denominator = a**2 + b**2
+	threshold_sq = (threshold**2) * denominator
+	result_x = []
+	result_y = []
+	N = points.shape[1]
+	for i in range(N):
+		x, y = points[:, i]
+		numerator_sq = (a * x + b * y + c)**2
+		if numerator_sq <= threshold_sq:
+			result_x.append(x)
+			result_y.append(y)
+
+	result = np.array([result_x,result_y])
+	return result
+```
+
+```{python}
+def calc_consensus(points, line, threshold):
+	inlier_set = classify_points(points, line, threshold)
+	return inlier_set, inlier_set.shape[1]
+```
+
+```{python}
+import random
+def sample_points_columns(points):
+	unique_set = set()
+	N = points.shape[1] - 1
+	while len(unique_set) < 2:
+		unique_set.add(random.randint(0, N))
+	return list(unique_set)[0], list(unique_set)[1]
+```
+
+```{python}
+def ransac(points, iterations, threshold):
+	final_inliers = None
+	final_n_inliers = 0
+
+	m = points.shape[1]
+	for i in range(iterations):
+		#implement early stopping criteria
+		c_i, c_j = sample_points_columns(points)
+		line = fit_line_homogeneous(np.append(points[:,c_i],1), np.append(points[:,c_j], 1))
+		inliers, num_of_inliers = calc_consensus(points, line, threshold)
+		if num_of_inliers > final_n_inliers:
+			final_n_inliers = num_of_inliers
+			final_inliers = inliers
+
+	return final_inliers
+```
+
+```{python}
+def pca_line(x): # assumes x is a (2 x n) array of points
+	d = np.cov(x)[:, 0]
+	d /= np.linalg.norm(d)
+	l = [d[1], -d[0]]
+	l.append(-(l@x.mean(1)))
+	return l
+```
