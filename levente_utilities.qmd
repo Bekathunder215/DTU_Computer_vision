@@ -289,6 +289,41 @@ def triangulate_nonlin(pixel_coords, proj_matrices):
     return scipy.optimize.least_squares(compute_residuals, x0).x.reshape(4,1)
 ```
 
+Checkerboard calibration
+
+```{python}
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+imgs = [cv2.imread(f"./{i}") for i in ["0.jpeg","1.jpeg","2.jpeg","3.jpeg","4.jpeg","5.jpeg"]]
+im_small = cv2.resize(imgs[0], None, fx=0.25, fy=0.25)
+patternSize=(7,10) # You have to downsize by 1 
+found_one, cornerslist_one = cv2.findChessboardCorners(im_small, patternSize)
+
+cornerslist = [cv2.findChessboardCorners(im, patternSize=patternSize) for im in imgs]
+
+def plotcornersandphotos():
+    for i, imcorn in enumerate(cornerslist):
+        found, corners = imcorn
+        if found:
+            # Draw corners on the image with cv2
+            cv2.drawChessboardCorners(imgs[i], patternSize, corners, found)
+
+            # Plot the image
+            plt.imshow(imgs[i])
+
+            # Plot the corners with larger dots
+            plt.scatter(corners[:, 0, 0], corners[:, 0, 1], color='red', marker='o', s=10, edgecolors='black', linewidth=1.5)
+
+            plt.title("Detected Checkerboard Corners")
+            plt.show()
+        else:
+            print("Checkerboard not found.")
+
+plotcornersandphotos()
+```
+
+
 Week 6 - Blobs
 
 ```{python}
@@ -451,4 +486,209 @@ def pca_line(x): # assumes x is a (2 x n) array of points
 	l = [d[1], -d[0]]
 	l.append(-(l@x.mean(1)))
 	return l
+```
+
+Week 8 - SIFT features
+
+
+```{python}
+def scale_spaced(im, sigma, n):
+	im_scales = []
+	for i in range(n):
+		s = sigma * (2**i)
+		g, _ = gaussian1DKernel(s)
+		smooth_im = convolve(convolve(im, g), g.T)
+		im_scales.append(smooth_im)
+	return im_scales
+```
+
+```{python}
+def difference_of_gaussians(im, sigma, n):
+	im_scales = scale_spaced(im, sigma, n)
+	dogs = []
+	for i in range(n-1):
+		dogs.append( im_scales[i+1] - im_scales[i])
+	return dogs
+```
+
+```{python}
+def non_maximum_suppression(r, above, below):
+        # Pad the array with -inf to handle edge cases
+        padded = np.pad(r, pad_width=1, mode="constant", constant_values=-np.inf)
+
+        # Compare each pixel with its left, right, top, and bottom neighbors
+        is_max = (
+            (r > padded[1:-1, :-2])
+            & (r > padded[1:-1, 2:])
+            & (r > padded[:-2, 1:-1])
+            & (r > padded[2:, 1:-1])
+	    & (r > above)
+	    & (r > below)
+        )
+		
+        # Create a suppressed version where only local maxima are kept
+        suppressed = np.where(is_max, r, 0)
+
+        return suppressed
+```
+
+
+```{python}
+def detect_blobs(im, sigma, n, tau):
+	dogs = difference_of_gaussians(im, sigma, n)
+		
+	N, M = im.shape
+	max_dogs = np.zeros((n+1, N, M)) # max filtered DoGs with zero padding
+		
+	for i in range(len(dogs)):
+		max_dogs[i+1] = cv2.dilate(abs(dogs[i]), np.ones((3,3))) 
+		
+	suppressed_dogs = np.zeros((n, N, M))
+	for i in range(len(dogs)):
+		suppressed_dogs[i] = non_maximum_suppression(dogs[i], max_dogs[i], max_dogs[i+2])
+		
+	return suppressed_dogs > tau
+```
+
+
+```{python}
+def transform_im(im, theta, s):
+	height, width = im.shape
+	scaled_image = cv2.resize(im, (int(width * s), int(height * s)), interpolation=cv2.INTER_AREA)
+
+	# Rotate the image by 45 degrees around its center
+	center = (width // 2, height // 2)
+	rotation_matrix = cv2.getRotationMatrix2D(center, theta, 1.0)
+	rotated_image = cv2.warpAffine(scaled_image, rotation_matrix, (width, height))
+	return rotated_image
+```
+
+
+
+```{python}
+sift = cv2.SIFT_create()
+
+im = io.imread("sunflowers.jpg")
+im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+
+# For float/other types (e.g., after normalization):
+im = cv2.normalize(im, None, 0, 255, cv2.NORM_MINMAX).astype('uint8')
+t_im = transform_im(im, -45, 1)
+
+print(im.shape)
+keypoints1, descriptors1 = sift.detectAndCompute(im, None)
+keypoints2, descriptors2 = sift.detectAndCompute(t_im, None)
+bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+# Match descriptors
+matches = bf.match(descriptors1, descriptors2)
+
+# Sort matches by distance (best matches first)
+matches = sorted(matches, key=lambda x: x.distance)
+matched_img = cv2.drawMatches(im, keypoints1, t_im, keypoints2, matches[:50], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+# TODO: filter mactches with the ratio test
+
+# Display the result
+plt.imshow(matched_img)
+plt.title("Feature Matching")
+plt.show()
+```
+
+Week 9 - Ransac for estimating fundamental matrix
+
+```{python}
+def Fest_8point(q1, q2):
+	# q1 and q2 have to be in inhomogenous
+	T1, q1 = normalize2d(q1)
+	T2, q2 = normalize2d(q2)
+	
+	N = q1.shape[1]
+
+	B = np.zeros((N, 9))
+
+	for i in range(N):
+		x1,y1 = q1[:,i]
+		x2,y2 = q2[:,i]
+		B[i] = [x1 * x2, x2 * y1, x2, x1 * y2, y1 * y2, y2, x1, y1, 1]
+	U, S, VT = np.linalg.svd(B)
+	
+	F = VT[-1, :].reshape((3,3))
+
+	# Enforce rank-2: Perform SVD on F and zero the smallest singular value
+	U_F, S_F, VT_F = np.linalg.svd(F)
+	S_F[2] = 0  # Set the third singular value to zero
+	F_rank2 = U_F @ np.diag(S_F) @ VT_F
+	
+	return  T2.T @ F_rank2  @ T1
+```
+
+
+```{python}
+def sample_matches(matches, kp1, kp2):
+	sample_matches = np.random.choice(matches, 8, replace=False)
+	q1 = np.zeros((2, 8))
+	q2 = np.zeros((2, 8))
+	for i, match in enumerate(sample_matches):
+		# Get indices from the DMatch object
+		idx1 = match.queryIdx  # Index in kp1 (first image)
+		idx2 = match.trainIdx  # Index in kp2 (second image)
+
+		# Retrieve coordinates from keypoints
+		q1[:, i] = kp1[idx1].pt  # Coordinates in first image
+		q2[:, i] = kp2[idx2].pt 	
+	return q1, q2
+```	
+
+```{python}
+def sampson_distance(F, p1, p2):
+    p2 = p2.reshape(3, 1)
+    p1 = p1.reshape(3, 1)
+    
+    numerator = (p2.T @ F @ p1).item() ** 2
+    Fp1 = F @ p1
+    Ftp2 = F.T @ p2
+    denominator = Fp1[0]**2 + Fp1[1]**2 + Ftp2[0]**2 + Ftp2[1]**2
+    return numerator / denominator
+```
+
+```{python}
+def calc_consensus(matches, kp1, kp2, Fest, threshold):
+	q1_inliers = [[],[]]
+	q2_inliers = [[],[]]
+	num_inliers = 0
+	for match in matches:
+		# Get indices from the DMatch object
+		idx1 = match.queryIdx  # Index in kp1 (first image)
+		idx2 = match.trainIdx  # Index in kp2 (second image)
+
+		# Retrieve coordinates from keypoints
+		p1 = p_i_inverse(np.array(kp1[idx1].pt).reshape(2,1))  # Coordinates in first image
+		p2 = p_i_inverse(np.array(kp2[idx2].pt).reshape(2,1))  # Coordinates in first image
+		
+		dist = sampson_distance(Fest, p1, p2)
+		if dist < threshold:
+			num_inliers += 1
+			q1_inliers[0].append(p1[0])
+			q1_inliers[1].append(p1[1])
+			q2_inliers[0].append(p2[0])
+			q2_inliers[1].append(p2[1])
+
+	return num_inliers, np.array(q1_inliers).reshape(2,num_inliers), np.array(q2_inliers).reshape(2, num_inliers)
+```
+
+```{python}
+def ransac_fundamental(matches, kp1, kp2, iterations, threshold):
+	q1_final, q2_final = None, None
+	final_n_inliers = 0
+
+	for _ in range(iterations):
+		q1, q2 = sample_matches(matches, kp1, kp2)
+
+		Fest = Fest_8point(q1, q2)
+
+		num_of_inliers, q1_inliers, q2_inliers = calc_consensus(matches, kp1, kp2, Fest, threshold)
+		if num_of_inliers > final_n_inliers:
+			final_n_inliers = num_of_inliers
+			q1_final, q2_final = q1_inliers, q2_inliers
+	return q1_final, q2_final, final_n_inliers
 ```
