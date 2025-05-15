@@ -6,13 +6,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy
 from cv2.typing import MatLike
-from scipy.spatial.transform import Rotation
 
 f = 700
 a = 1
 b = 0
 dx = 600
 dy = 400
+
+
+def read_opencv_img(name):
+    return cv2.imread(name)[:, :, ::-1]
 
 
 def box3d(n: int = 16) -> np.ndarray:
@@ -42,11 +45,13 @@ def PiInv(nparray: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Homogeneous coordinate array of shape (D+1, N).
     """
-    ones = np.ones(
-        (1, nparray.shape[1])
-    )  # make ones array with dim 1 * N, where N is the ammount of points in the array
+    # ones = np.ones(
+    #    (1, nparray.shape[1])
+    # )  # make ones array with dim 1 * N, where N is the ammount of points in the array
     # They are column vectors, meaining they have all x's in one array and all y's in another
-    return np.vstack((nparray, ones))
+    # return np.vstack((nparray, ones))
+    _, n = nparray.shape
+    return np.vstack((nparray, np.ones(n)))
 
 
 def Pi(nparray: np.ndarray) -> np.ndarray:
@@ -67,17 +72,11 @@ def Pi(nparray: np.ndarray) -> np.ndarray:
 
 
 def projectpoints_with_dist(
-    K: np.ndarray = np.array([[f, b * f, dx], [0, a * f, dy], [0, 0, 1]]),
-    R: np.ndarray = np.array(
-        [
-            [np.sqrt(0.5), -np.sqrt(0.5), 0.0],
-            [np.sqrt(0.5), np.sqrt(0.5), 0.0],
-            [0.0, 0.0, 1],
-        ]
-    ),
-    t: np.ndarray = np.array([[0.0], [0.0], [10.0]]),
-    Q: np.ndarray = box3d(),
-    dist: list[float] = [-0.245031, 0.071524, -0.00994978],
+    K: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    Q: np.ndarray,
+    dist: list[float] = [0.0],
 ) -> np.ndarray:
     """
     Projects 3D points onto a 2D image plane with radial distortion.
@@ -120,10 +119,8 @@ def projectpoints_with_dist(
 
 
 def project_points_with_Proj_matrix(
-    P: np.ndarray = np.array(
-        [[700.0, 0.0, 600.0, 600.0], [0, 700.0, 400.0, 400.0], [0.0, 0.0, 0.1, 0.1]]
-    ),
-    Q=box3d(),
+    P: np.ndarray,
+    Q,
     dist: list[float] = 0,
 ) -> np.ndarray:
     """
@@ -361,61 +358,33 @@ def hest_with_numpy(
     return H
 
 
-def hest(
-    pointlist: list = [
-        np.array([[1.0], [1.0]]),
-        np.array([[0.0], [3.0]]),
-        np.array([[2.0], [3.0]]),
-        np.array([[2.0], [4.0]]),
-    ],
-    dest: list = [
-        np.array([[-0.33333333], [-0.66666667]]),
-        np.array([[-0.33333333], [-2.0]]),
-        np.array([[-1.0], [-2.0]]),
-        np.array([[-1.0], [-2.66666667]]),
-    ],
-    normalize: bool = False,
-) -> np.ndarray:
-    """
-    Estimates the homography matrix using the linear DLT algorithm.
-
-    Args:
-        pointlist (list, optional): List of source points in homogeneous coordinates. Default includes four points.
-        dest (list, optional): List of destination points in homogeneous coordinates. Default includes four points.
-        normalize (bool, optional): Whether to normalize the points before computing the homography. Default is False.
-
-    Returns:
-        np.ndarray: The 3x3 estimated homography matrix.
-    """
-    # assert len(pointlist) == 4 and len(dest) == 4
-
-    # Modify how points are extracted from the lists
+def hest(q1: np.ndarray, q2: np.ndarray, normalize: bool = False):
     if normalize:
-        T1, src_pts = normalize2d(pointlist)
-        T2, dst_pts = normalize2d(dest)
+        T1, src_pts = normalize2d(q1)
+        T2, dst_pts = normalize2d(q2)
     else:
-        src_pts = [p.flatten() for p in pointlist]
-        dst_pts = [p.flatten() for p in dest]
+        src_pts = q1
+        dst_pts = q2
 
-    B = []
-    for (x, y), (xp, yp) in zip(src_pts, dst_pts):
-        B.append([-x, -y, -1, 0, 0, 0, x * xp, y * xp, xp])
-        B.append([0, 0, 0, -x, -y, -1, x * yp, y * yp, yp])
+    N = src_pts.shape[1]
+    B = np.zeros((2 * N, 9))
 
-    B = np.array(B)
+    for i in range(N):
+        x, y = src_pts[:, i]
+        xp, yp = dst_pts[:, i]
 
-    # Compute SVD
-    U, S, VT = np.linalg.svd(B)
-    h = VT[-1, :]  # Smallest singular vector (last row of VT)
+        B[2 * i] = [-x, -y, -1, 0, 0, 0, x * xp, y * xp, xp]
+        B[2 * i + 1] = [0, 0, 0, -x, -y, -1, x * yp, y * yp, yp]
 
-    # Reshape into 3x3 homography matrix
-    H = h.reshape(3, 3)
+    # Solve using SVD (last row of V^T)
+    _, _, VT = np.linalg.svd(B)
+    H = VT[-1].reshape(3, 3)
 
     if normalize:
-        # Apply the normalization matrices to the estimated homography
+        # Denormalize: H = T2^{-1} @ H_norm @ T1
         H = np.linalg.inv(T2) @ H @ T1
 
-    return H
+    return H  # Normalize by last element
 
 
 def normalize2d_numpy(points: np.ndarray) -> tuple:
@@ -513,12 +482,12 @@ def CrossOp(dvector: np.ndarray) -> np.ndarray:
 
 
 def fundamentalmatrix(
-    Q: np.ndarray = np.array([[1.0], [0.5], [4.0], [1.0]]),
-    K: np.ndarray = np.array([[f, b * f, dx], [0, a * f, dy], [0, 0, 1]]),
-    R1: np.ndarray = np.eye(3),
-    t1: np.ndarray = np.array([[0.0], [0.0], [0.0]]),
-    t2: np.ndarray = np.array([[0.2], [2.0], [1.0]]),
-    R2: np.ndarray = Rotation.from_euler("xyz", [0.7, -0.5, 0.8]).as_matrix(),
+    Q: np.ndarray,
+    K: np.ndarray,
+    R1: np.ndarray,
+    t1: np.ndarray,
+    t2: np.ndarray,
+    R2: np.ndarray,
 ) -> np.ndarray:
     """
     Computes the fundamental matrix from two camera positions and a set of 3D points.
@@ -706,6 +675,23 @@ def get_manual_checkerboard_points(n: int, m: int) -> np.ndarray:
     return Q
 
 
+def triangulate_nonlin_lev(pixel_coords, proj_matrices):
+    N = len(pixel_coords)
+    proj_stacked = np.vstack(proj_matrices)
+    coords_stacked = np.hstack(pixel_coords)
+
+    def compute_residuals(Q):
+        residuals = np.zeros(2 * N)
+        for i in range(N):
+            residuals[2 * i : (2 * i) + 2] = (
+                Pi(proj_matrices[i] @ Q).reshape(-1, 1) - pixel_coords[i]
+            ).flatten()
+        return residuals
+
+    x0 = triangulate(pixel_coords, proj_matrices).reshape(4)
+    return scipy.optimize.least_squares(compute_residuals, x0).x.reshape(4, 1)
+
+
 def triangulate_nonlin(pointlist: np.ndarray, Projlist: np.ndarray) -> np.ndarray:
     """
     Triangulates 3D points from multiple camera projections using nonlinear optimization.
@@ -870,6 +856,16 @@ def structureTensor(im: MatLike, sigma: float, epsilon: float) -> np.ndarray:
 
     # Return as a 3D array
     return np.stack((Ix2, IxIy, Iy2), axis=-1)
+
+
+def structure_tensor_lev(im, sigma, epsilon):
+    I, Ix, Iy = gaussianSmoothing(im, sigma)
+    g_eps, _ = gausian1DKernel(epsilon)
+
+    c_11 = convolve(Ix**2, g_eps)
+    c_rest = convolve(np.multiply(Ix, Iy), g_eps)
+    c_22 = convolve(Iy**2, g_eps)
+    return c_11, c_rest, c_22
 
 
 def harrisMeasure(im, sigma, epsilon, k):
