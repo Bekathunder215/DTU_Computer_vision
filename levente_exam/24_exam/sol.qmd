@@ -1,0 +1,629 @@
+Question 1 => G
+```{python}
+import numpy as np
+import cv2
+from matplotlib import pyplot as plt
+```
+```{python}
+def p_i(points):
+    return points[:-1]/ points[-1] 
+
+def p_i_inverse(points):
+    _, n = points.shape
+    return np.vstack((points, np.ones(n)))
+```
+```{python}
+def projectpoints(K, R, t, Q):
+	R_t = np.hstack((R, t))
+	return K @ R_t @ Q
+```
+
+```{python}
+f = 1400
+delta_x = 750
+delta_y = 520
+
+
+K = np.array([[f, 0, delta_x],
+	      [0, f, delta_y],
+	      [0, 0, 1]])
+
+R = cv2.Rodrigues(np.array([0.2, 0.2, -0.1]))[0]
+t = np.array([-0.08, 0.01, 0.03]).reshape(-1,1)
+
+Q = p_i_inverse(np.array([-0.38, 0.1, 1.32]).T.reshape(-1, 1))
+
+q = projectpoints(K, R , t, Q)
+print(p_i(q))
+```
+
+Question 2 => F
+
+```{python}
+def hest(q1: np.ndarray, q2: np.ndarray, normalize: bool = False):
+    if normalize:
+        T1, src_pts = normalize2d(q1)
+        T2, dst_pts = normalize2d(q2)
+    else:
+        src_pts = q1
+        dst_pts = q2
+
+    N = src_pts.shape[1]
+    B = np.zeros((2*N, 9))
+
+    for i in range(N):
+        x, y = src_pts[:, i]
+        xp, yp = dst_pts[:, i]
+        
+        B[2*i] = [-x, -y, -1, 0, 0, 0, x*xp, y*xp, xp]
+        B[2*i+1] = [0, 0, 0, -x, -y, -1, x*yp, y*yp, yp]
+
+    # Solve using SVD (last row of V^T)
+    _, _, VT = np.linalg.svd(B)
+    H = VT[-1].reshape(3, 3)
+
+    if normalize:
+        # Denormalize: H = T2^{-1} @ H_norm @ T1
+        H = np.linalg.inv(T2) @ H @ T1
+
+    return H   # Normalize by last element
+```
+
+
+```{python}
+p1 = np.array([[ 1.45349587e+02, -1.12915131e-01, 1.91640565e+00, -6.08129962e-01],
+[ 1.05603820e+02, 5.62792554e-02, 1.79040110e+00, -2.32182177e-01]])
+p2 = np.array([[ 1.3753556, -1.77072961, 2.94511795, 0.04032374],
+[ 0.30936653, 0.37172814, 1.44007577, -0.03173825]])
+
+Hest = hest(p2, p1)
+Hest = Hest / Hest[0,0]
+
+print(Hest)
+print( p_i(Hest @ p_i_inverse(p2)))
+```
+
+Question 3 => G (Seven point algorithm)
+
+Question 4 => G
+```{python}
+K = np.array([[300, 0 , 840],
+	      [0, 300, 620],
+	      [0, 0, 1]], float)
+dist_coeffs = [-0.2, 0.01, -0.03]
+```
+
+```{python}
+def delta_r(r, dist_coeffs):
+    return np.sum([ c * r ** (idx+2) for idx, c in enumerate(dist_coeffs)])
+
+def p(norms, dist_coeffs):
+    return np.array([delta_r(v, dist_coeffs) for v in norms])
+
+def dist_poly(M, dist_coeffs):
+    norms = 1 + p(np.linalg.norm(M, axis=0), dist_coeffs)
+    norm_matrix = np.tile(norms, (2, 1))
+    return np.multiply(M, norm_matrix)
+
+def undistort_image(im, K, dist_coeffs):
+    x, y = np.meshgrid(np.arange(im.shape[1]), np.arange(im.shape[0]))
+    p = np.stack((x, y, np.ones(x.shape))).reshape(3, -1)
+
+    p_d = K @ p_i_inverse( dist_poly( p_i( np.linalg.inv(K) @ p ),  dist_coeffs) ) 
+    x_d = p_d[0].reshape(x.shape).astype(np.float32)
+    y_d = p_d[1].reshape(y.shape).astype(np.float32)
+    assert (p_d[2]==1).all(), 'You did a mistake somewhere'
+    return cv2.remap(im, x_d, y_d, cv2.INTER_LINEAR)
+```
+
+```{python}
+k3 = -0.2
+k5 = 0.01
+k7 = -0.03
+
+# Undistorted pixel coordinates
+undistorted_pixel = np.array([400, 500])
+
+# Step 1: Extract intrinsic parameters
+fx = K[0, 0]  # focal length in x
+fy = K[1, 1]  # focal length in y
+cx = K[0, 2]  # principal point x
+cy = K[1, 2]  # principal point y
+
+# Step 2: Convert undistorted pixel to normalized coordinates
+x_norm = (undistorted_pixel[0] - cx) / fx
+y_norm = (undistorted_pixel[1] - cy) / fy
+
+# Step 3: Calculate the radius in normalized space
+r_squared = x_norm**2 + y_norm**2
+r = np.sqrt(r_squared)
+
+# Step 4: Apply the distortion model
+distortion_factor = 1 + (k3 * r_squared) + (k5 * r_squared**2) + (k7 * r_squared**3)
+x_distorted_norm = x_norm * distortion_factor
+y_distorted_norm = y_norm * distortion_factor
+
+# Step 5: Convert back to pixel coordinates
+x_distorted = (x_distorted_norm * fx) + cx
+y_distorted = (y_distorted_norm * fy) + cy
+
+# Result: The distorted pixel coordinates
+distorted_pixel = np.array([x_distorted, y_distorted])
+
+print(f"Undistorted pixel: {undistorted_pixel}")
+print(f"Normalized coordinates (undistorted): ({x_norm:.6f}, {y_norm:.6f})")
+print(f"r: {r:.6f}")
+print(f"Distortion factor: {distortion_factor:.6f}")
+print(f"Normalized coordinates (distorted): ({x_distorted_norm:.6f}, {y_distorted_norm:.6f})")
+print(f"Distorted pixel: {distorted_pixel}")
+```
+Question 5 => Blob detection, Harris corners  P
+
+
+Question 6 => Corner at (2,3)
+
+
+```{python}
+data = np.load("./materials/harris.npy", allow_pickle=True).item()
+
+I_xx = data['g*(I_x^2)']
+I_yy = data['g*(I_y^2)']
+I_xy = data['g*(I_x I_y)']
+
+print(data.keys())
+
+k = 0.06
+tau = 5
+```
+
+```{python}
+def harris_measure(k):
+    a, c, b = I_xx, I_xy, I_yy
+    return np.multiply(a,b) - c**2 - k * (a + b) ** 2
+```
+
+```{python}
+def corner_detector(k, tau):
+    r = harris_measure(k)
+    
+
+    def non_maximum_suppression(r, tau=0.0, include_diagonals=True):
+        """
+        Apply non-maximum suppression to an array.
+        
+        Parameters:
+        r (numpy.ndarray): Input array to apply NMS
+        tau (float): Threshold value to filter results (default: 0.0)
+        include_diagonals (bool): Whether to include diagonal neighbors in comparison (default: True)
+        
+        Returns:
+        numpy.ndarray: Array with non-maxima suppressed
+        """
+        # Pad the array with -inf to handle edge cases
+        padded = np.pad(r, pad_width=1, mode="constant", constant_values=-np.inf)
+        
+        # Compare with 4-connected neighbors (horizontal and vertical)
+        is_max = (
+            (r > padded[1:-1, :-2])  # Left neighbor
+            & (r > padded[1:-1, 2:])  # Right neighbor
+            & (r > padded[:-2, 1:-1])  # Top neighbor
+            & (r > padded[2:, 1:-1])  # Bottom neighbor
+        )
+        
+        # Also compare with diagonal neighbors if requested
+        if include_diagonals:
+            is_max = is_max & (
+                (r > padded[:-2, :-2])  # Top-left neighbor
+                & (r > padded[:-2, 2:])  # Top-right neighbor
+                & (r > padded[2:, :-2])  # Bottom-left neighbor
+                & (r > padded[2:, 2:])  # Bottom-right neighbor
+            )
+        
+        # Create a suppressed version where only local maxima are kept
+        suppressed = np.where(is_max, r, 0)
+        
+        # Apply threshold if requested
+        if tau > 0:
+            suppressed = np.where(suppressed >= tau, suppressed, 0)
+        
+        return suppressed
+
+
+    r = non_maximum_suppression(r)
+    return np.where(r >= tau, r, r>= tau)
+
+
+```
+
+```{python}
+c_img = corner_detector(0.06, 5)
+plt.imshow(c_img)
+plt.show()
+```
+
+Question 7 => C
+
+Question 8 => A
+
+Question 9 => G
+
+```{python}
+sift_data = np.load("./materials/sift_data.npy", allow_pickle=True).item()
+kp1 = sift_data["kp1"]
+des1 = sift_data["des1"]
+kp2 = sift_data["kp2"]
+des2 = sift_data["des2"]
+
+def rootsift(descriptors):
+    """
+    Applies the RootSIFT normalization to SIFT descriptors
+    
+    Args:
+        descriptors: numpy array of SIFT descriptors
+        
+    Returns:
+        Root-SIFT normalized descriptors
+    """
+    # L1 normalize
+    descriptors = descriptors / (np.sum(descriptors, axis=1, keepdims=True) + 1e-7)
+    
+    # Square root (Hellinger kernel)
+    descriptors = np.sqrt(descriptors)
+    
+    return descriptors
+
+des1 = rootsift(des1)
+des2 = rootsift(des2)
+
+bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)  # Must set crossCheck to False for knnMatch
+matches = bf.knnMatch(des1, des2, k=2)
+
+good_matches = []
+ratio = 0.8  # 0.7-0.8 is typical
+for m, n in matches:
+    if m.distance < ratio * n.distance:
+        good_matches.append(m)
+
+print(f"Number of 0.8+ ration matches {len(good_matches)}")
+```
+
+Question 10 =>  H
+
+```{python}
+def read_opencv_img(name):
+	return cv2.imread(name)[:,:,::-1]
+
+im0 = read_opencv_img("./materials/board0.jpg")
+im1 = read_opencv_img("./materials/board1.jpg")
+im2 = read_opencv_img("./materials/board2.jpg")
+im3 = read_opencv_img("./materials/board3.jpg")
+im4 = read_opencv_img("./materials/board4.jpg")
+
+imgs = [im0, im1, im2, im3, im4]
+
+for i in range(5):
+    plt.imshow(imgs[i])
+    plt.show()
+```
+
+```{python}
+import glob
+def calibrate_camera(image_paths, checkerboard_size=(7, 10)):
+    """
+    Calibrate camera from checkerboard images.
+    
+    Args:
+        image_paths: List of paths to images containing checkerboard patterns
+        checkerboard_size: Size of the checkerboard (internal corners)
+        
+    Returns:
+        ret: RMS reprojection error
+        mtx: Camera matrix containing focal lengths (fx, fy) and optical centers (cx, cy)
+        dist: Distortion coefficients
+        rvecs: Rotation vectors for each image
+        tvecs: Translation vectors for each image
+    """
+    # Prepare object points (0,0,0), (1,0,0), (2,0,0) ... (8,5,0)
+    objp = np.zeros((checkerboard_size[0] * checkerboard_size[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:checkerboard_size[0], 0:checkerboard_size[1]].T.reshape(-1, 2)
+    
+    # Arrays to store object points and image points
+    objpoints = []  # 3D points in real world space
+    imgpoints = []  # 2D points in image plane
+    
+    # Process each image separately before attempting to create the visualization
+    successful_images = []
+    
+    for fname in image_paths:
+        # Read image
+        img = cv2.imread(fname)
+        if img is None:
+            print(f"Warning: Could not read image {fname}")
+            continue
+            
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Find the chessboard corners
+        # Let's try with different flags to improve detection
+        flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_FAST_CHECK
+        ret, corners = cv2.findChessboardCorners(gray, checkerboard_size, flags)
+        
+        # If found, add object points, image points
+        if ret:
+            # Refine corner positions for better accuracy
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+            corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            
+            objpoints.append(objp)
+            imgpoints.append(corners2)
+            successful_images.append((img, fname))
+            print(f"Successfully detected checkerboard in {fname}")
+        else:
+            print(f"Could not find checkerboard pattern in {fname}")
+    
+    # Check if we have any successful detections
+    if not objpoints:
+        raise ValueError("No checkerboard patterns found in any of the images. Check the file paths and checkerboard_size parameter.")
+    
+    # Now create visualization only for successful images
+    fig, axes = plt.subplots(1, len(successful_images), figsize=(15, 5))
+    if len(successful_images) == 1:
+        axes = [axes]
+        
+    for i, (img, fname) in enumerate(successful_images):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        ret, corners = cv2.findChessboardCorners(gray, checkerboard_size, None)
+        cv2.drawChessboardCorners(img, checkerboard_size, corners, ret)
+        axes[i].imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        axes[i].set_title(f'Image {i+1}')
+        axes[i].axis('off')
+    
+    # plt.tight_layout()
+    # plt.show()
+    
+    # Calibrate camera using the successful images
+    if gray is not None:
+        ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
+            objpoints, imgpoints, gray.shape[::-1], None, None
+        )
+        return ret, mtx, dist, rvecs, tvecs
+    else:
+        raise ValueError("Failed to process any images")    
+        
+# Define paths to the checkerboard images
+image_paths = sorted(glob.glob('./materials/board*.jpg'))
+
+# Run calibration
+ret, camera_matrix, dist_coeffs, rvecs, tvecs = calibrate_camera(image_paths)
+print(camera_matrix)
+```
+
+Question 11 => H
+
+Question 12 => A
+
+```{python}
+im1 = cv2.imread("./materials/im1.jpg")
+im2 = cv2.imread("./materials/im2.jpg")
+
+# 2. Detect SIFT keypoints and descriptors
+sift = cv2.SIFT_create()
+kp1, des1 = sift.detectAndCompute(cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY), None)
+kp2, des2 = sift.detectAndCompute(cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY), None)
+
+# 3. Match features
+bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+matches = sorted(bf.match(des1, des2), key=lambda x: x.distance)
+
+# 4. Extract matched points
+pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
+pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+# 5. Estimate homography with RANSAC
+H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC)
+print(H / H[0,0])
+```
+
+Question 13 => A
+
+Question 14 => A
+
+Question 15 => L
+
+```{python}
+def cross_op(p):
+	res = np.zeros((3,3))
+	res[0,1] = -p[2]
+	res[0,2] = p[1]
+	res[1,0] = p[2]
+	res[1,2] = -p[0]
+	res[2,0] = -p[1]
+	res[2,1] = p[0]
+	return res
+```
+
+
+```{python}
+def compute_essential(R, t):
+	return cross_op(t) @ R
+```
+
+```{python}
+def compute_fundamental(R, t, K_1, K_2):
+	E = compute_essential(R, t)
+	return np.linalg.inv(K_2).T @ E  @ np.linalg.inv(K_1)
+```
+
+```{python}
+def epipolar_through_point(q, F):
+	return F @ q
+```
+
+
+```{python}
+def distance_from_line(l, p, homo=True):
+	l = l / np.sqrt(l[0]**2 + l[1]**2)
+	p = p_i_inverse(p) if not homo else p
+	p = p / p[-1] # to make sure scale is 1
+
+	return l.T@p
+
+```
+
+```{python}
+K = np.array([[300, 0, 840], [0, 300, 620.0], [0, 0, 1]], float)
+R1 = cv2.Rodrigues(np.array([-2.3, -0.7, 1.0]))[0]
+t1 = np.array([0.0, -1.0, 4.0], float)
+R2 = cv2.Rodrigues(np.array([-0.6, 0.5, -0.9]))[0]
+t2 = np.array([0.0, 0.0, 9.0], float)
+R3 = cv2.Rodrigues(np.array([-0.1, 0.9, -1.2]))[0]
+t3 = np.array([-1.0, -6.0, 28.0], float)
+
+p1 = np.array([853.0, 656.0]).reshape(2, 1)
+p2 = np.array([814.0, 655.0]).reshape(2, 1)
+p3 = np.array([798.0, 535.0]).reshape(2, 1)
+
+R, t =  R1 @ R2.T, t1 - R1 @ R2.T @ t2  # Transform relative to Camera 2 (note this is the reversed formula compared to 3_lab)
+l = epipolar_through_point(p_i_inverse(p2), compute_fundamental(R, t, K, K))
+
+print(distance_from_line(l, p1, homo=False))
+```
+
+Question 16 => E
+
+```{python}
+def triangulate(pixel_coords, proj_matrices):
+    assert len(pixel_coords) == len(proj_matrices)
+    N = len(pixel_coords)
+
+    B = np.zeros((2*N, 4))
+
+    for i in range(N):
+        B[2*i: (2*i)+2, :] = (pixel_coords[i] * proj_matrices[i][2, :])  - proj_matrices[i][:2,:]
+
+    _, S, VT = np.linalg.svd(B)
+
+    smallest_idx = np.argmin(S)
+
+    V = VT.T
+    smallest_eigenvector = V[:, smallest_idx]
+
+    return smallest_eigenvector
+```
+
+```{python}
+import scipy
+
+def triangulate_nonlin(pixel_coords, proj_matrices):
+    N = len(pixel_coords)
+    proj_stacked = np.vstack(proj_matrices)
+    coords_stacked = np.hstack(pixel_coords)
+
+    def compute_residuals(Q):
+        residuals = np.zeros(2 * N)
+        for i in range(N):
+            residuals[2*i: (2*i)+2] = (p_i(proj_matrices[i] @ Q).reshape(-1,1) - pixel_coords[i]).flatten()
+        return residuals
+    
+    x0 = triangulate(pixel_coords, proj_matrices).reshape(4)
+    return scipy.optimize.least_squares(compute_residuals, x0).x.reshape(4,1)
+```
+
+```{python}
+P1 = K @ np.hstack((R1, t1.reshape(-1,1)))
+P2 = K @ np.hstack((R2, t2.reshape(-1,1)))
+P3 = K @ np.hstack((R3, t3.reshape(-1,1)))
+print(p_i(triangulate_nonlin([p1, p2, p3],[P1, P2, P3])))
+```
+
+Question 17 => E
+
+```{python}
+R = cv2.Rodrigues(np.array([-1.9, 0.1, -0.2]))[0]
+t = np.array([-1.7, 1.3, 1.5], float).reshape(-1,1)
+
+print(-R.T @ t)
+```
+
+Question 18 => J
+
+```{python}
+K = np.array([[300, 0, 840], [0, 300, 620.0], [0, 0, 1]], float)
+R2 = cv2.Rodrigues(np.array([-0.6, 0.5, -0.9]))[0]
+t2 = np.array([0.0, 0.0, 9.0], float)
+R3 = cv2.Rodrigues(np.array([-0.1, 0.9, -1.2]))[0]
+t3 = np.array([-1.0, -6.0, 28.0], float)
+q3 = np.array([[-0.38], [0.1], [1.32]])
+
+T_cam_world = np.zeros((4,4))
+T_cam_world[3,3] = 1
+T_cam_world[:3, :3] = R3.T
+T_cam_world[:3, -1] = - R3.T @ t3
+
+
+q_world = T_cam_world @ p_i_inverse(q3)
+
+T_world_cam_2 = np.zeros((4,4))
+T_world_cam_2[3,3] = 1
+T_world_cam_2[:3, :3] = R2
+T_world_cam_2[:3, -1] = t2
+
+print( p_i(T_world_cam_2 @ q_world)) 
+```
+
+Question 19 => D
+- The formula is: N = log(1-p) / log(1-(1-ε)^s)
+Question 20 => O
+Look up the table for 95% and then use the formula tau**2 = value * sigma**2
+
+```{python}
+import numpy as np
+p = 0.9
+inliers = 465 / 1177
+eps = 1 - inliers
+print(np.log(1 - p )/ np.log(1 - (1-eps)**4))
+```
+
+m = 2
+
+```{python}
+print(5.99 * 1.4**2)
+```
+
+Question 21 => C
+
+```{python}
+primary = np.array([12, 9, 10, 13, 18, 25, 33, 40, 46, 49, 48, 45, 39, 31, 23, 17])
+secondary = np.array([15, 29, 43, 49, 43, 29, 15, 10])
+```
+
+```{python}
+import math
+def unwrap():
+    n_1 = 40
+
+    fft_primary = np.fft.rfft(primary, axis=0)
+    theta_primary = np.angle(fft_primary[1])
+
+    fft_secondary = np.fft.rfft(secondary, axis=0)
+    theta_secondary = np.angle(fft_secondary[1])
+
+    theta_c = (theta_secondary - theta_primary) % (2 * math.pi)
+    o_primary = np.round((n_1 * theta_c - theta_primary) / (2 * math.pi))
+    theta = (((2 * math.pi) * o_primary + theta_primary) / n_1) % (2 * math.pi)
+    return theta
+```
+
+```{python}
+print(unwrap())
+```
+
+Question 22 => H
+
+An essential matrix encodes the relative pose (rotation and translation) between two camera positions. When we have an essential matrix E, it can be decomposed as E = [t]×R, where R is the rotation matrix and [t]× is the skew-symmetric matrix formed from the translation vector
+
+However, there are several fundamental issues with using only essential matrices to determine the fifth pose:
+
+Four way ambiguity: When decomposing an essential matrix into rotation R and translation t, there are four possible camera pose configurations. This is due to the fact that given a single essential matrix, we get four possible solutions: (C1, R1), (C2, R2), (C3, R3), and (C4, R4).
+
+Scale ambiguity:

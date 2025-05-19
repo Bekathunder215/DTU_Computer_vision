@@ -1,0 +1,334 @@
+Question 1 => C
+
+```{python}
+import numpy as np
+import cv2
+from matplotlib import pyplot as plt
+f = 1200
+beta = 0
+alpha = 1
+delta_x = 400
+delta_y = 350
+K = np.array([[f, beta * f, delta_x],
+	      [0, alpha * f, delta_y],
+	      [0, 0, 1]])
+print(K)
+```
+
+Question 2 => A
+
+```{python}
+f = 1000
+delta_x = 400
+delta_y = 300
+K = np.array([[f, beta * f, delta_x],
+	      [0, alpha * f, delta_y],
+	      [0, 0, 1]])
+# Bilinearly resizing means halving every value in K (except the 1 at the end)
+```
+
+Question 3 => G
+```{python}
+def p_i(points):
+    return points[:-1]/ points[-1] 
+
+def p_i_inverse(points):
+    _, n = points.shape
+    return np.vstack((points, np.ones(n)))
+```
+```{python}
+def projectpoints(K, R, t, Q):
+	R_t = np.hstack((R, t))
+	return K @ R_t @ Q
+
+```
+```{python}
+f = 1720 
+delta_x = 680
+delta_y = 610
+K = np.array([[f, beta * f, delta_x],
+	      [0, alpha * f, delta_y],
+	      [0, 0, 1]])
+R = cv2.Rodrigues(np.array([-0.1, 0.1, -0.2]))[0]
+t = np.array([[0.09], [0.05], [0.05]]).reshape(-1,1)
+Q = np.array([-0.03, 0.01, 0.59]).reshape(3,1)
+
+print(p_i(projectpoints(K,R,t, p_i_inverse(Q))))
+```
+
+Question 4 => I
+
+Equivalent: Homography, Fundamental Matrix, Camera Matrix, Projection Matrix
+Not equivalent: Rotation matrix
+
+
+Question 5 => K
+```{python}
+def cross_op(p):
+	res = np.zeros((3,3))
+	res[0,1] = -p[2]
+	res[0,2] = p[1]
+	res[1,0] = p[2]
+	res[1,2] = -p[0]
+	res[2,0] = -p[1]
+	res[2,1] = p[0]
+	return res
+```
+
+
+```{python}
+def compute_essential(R, t):
+	return cross_op(t) @ R
+```
+
+```{python}
+def compute_fundamental(R, t, K_1, K_2):
+	E = compute_essential(R, t)
+	return np.linalg.inv(K_2).T @ E  @ np.linalg.inv(K_1)
+```
+
+```{python}
+def epipolar_through_point(q, F):
+	return F @ q
+```
+
+
+```{python}
+def distance_from_line(l, p, homo=True):
+	l = l / np.sqrt(l[0]**2 + l[1]**2)
+	p = p_i_inverse(p) if not homo else p
+	p = p / p[-1] # to make sure scale is 1
+
+	return l.T@p
+
+```
+
+```{python}
+K = np.array([[900, 0, 1070], [0, 900, 610.0], [0, 0, 1]], float)
+R1 = cv2.Rodrigues(np.array([-1.6, 0.3, -2.1]))[0]
+t1 = np.array([[0.0], [1.0], [3.0]], float)
+R2 = cv2.Rodrigues(np.array([-0.4, -1.3, -1.6]))[0]
+t2 = np.array([[0.0], [1.0], [6.0]], float)
+R3 = cv2.Rodrigues(np.array([2.5, 1.7, -0.4]))[0]
+t3 = np.array([[2.0], [-7.0], [25.0]], float)
+
+p1 = np.array([[1046.0], [453.0]]).reshape(2,1)
+p2 = np.array([[1126.0], [671.0]]).reshape(2,1)
+p3 = np.array([[1165.0], [453.0]]).reshape(2,1)
+
+
+R, t =  R2 @ R1.T, t2 - R2 @ R1.T @ t1  # Transform relative to Camera 2 (note this is the reversed formula compared to 3_lab)
+l = epipolar_through_point(p_i_inverse(p1), compute_fundamental(R, t, K, K))
+
+print(distance_from_line(l, p2, homo=False))
+```
+
+Question 6 => D
+
+```{python}
+def triangulate(pixel_coords, proj_matrices):
+    assert len(pixel_coords) == len(proj_matrices)
+    N = len(pixel_coords)
+
+    B = np.zeros((2*N, 4))
+
+    for i in range(N):
+        B[2*i: (2*i)+2, :] = (pixel_coords[i] * proj_matrices[i][2, :])  - proj_matrices[i][:2,:]
+
+    _, S, VT = np.linalg.svd(B)
+
+    smallest_idx = np.argmin(S)
+
+    V = VT.T
+    smallest_eigenvector = V[:, smallest_idx]
+
+    return smallest_eigenvector
+```
+```{python}
+P1 = K @ np.hstack((R1, t1.reshape(-1,1)))
+P2 = K @ np.hstack((R2, t2.reshape(-1,1)))
+P3 = K @ np.hstack((R3, t3.reshape(-1,1)))
+print(p_i(triangulate([p1, p2, p3],[P1, P2, P3])))
+```
+
+Question 7 => E 
+
+Question 8 => E
+
+
+RANSAC number of points estimation:
+- line
+- homography => 4 points
+- fundamental matrix => 8/7 points
+- projection matrix (3 points + 1 for validation)
+- essential matrix => 5 points
+
+Question 9 => A
+
+Question 10 => D
+
+Question 11 => I
+
+```{python}
+l = np.array([[1],
+	      [2],
+	      [2]])
+
+q = np.array([[2],
+	      [4],
+	      [3]])
+print(distance_from_line(l, q, homo=True))
+```
+
+Question 12 => G
+
+```{python}
+data = np.load("./materials/harris.npy", allow_pickle=True).item()
+
+I_xx = data['g*(I_x^2)']
+I_yy = data['g*(I_y^2)']
+I_xy = data['g*(I_x I_y)']
+
+print(data.keys())
+
+k = 0.06
+tau = 5
+```
+
+```{python}
+def harris_measure(k):
+    a, c, b = I_xx, I_xy, I_yy
+    return np.multiply(a,b) - c**2 - k * (a + b) ** 2
+```
+
+```{python}
+def corner_detector(k, tau):
+    r = harris_measure(k)
+    
+
+    def non_maximum_suppression(r, tau=0.0, include_diagonals=True):
+        """
+        Apply non-maximum suppression to an array.
+        
+        Parameters:
+        r (numpy.ndarray): Input array to apply NMS
+        tau (float): Threshold value to filter results (default: 0.0)
+        include_diagonals (bool): Whether to include diagonal neighbors in comparison (default: True)
+        
+        Returns:
+        numpy.ndarray: Array with non-maxima suppressed
+        """
+        # Pad the array with -inf to handle edge cases
+        padded = np.pad(r, pad_width=1, mode="constant", constant_values=-np.inf)
+        
+        # Compare with 4-connected neighbors (horizontal and vertical)
+        is_max = (
+            (r > padded[1:-1, :-2])  # Left neighbor
+            & (r > padded[1:-1, 2:])  # Right neighbor
+            & (r > padded[:-2, 1:-1])  # Top neighbor
+            & (r > padded[2:, 1:-1])  # Bottom neighbor
+        )
+        
+        # Also compare with diagonal neighbors if requested
+        if include_diagonals:
+            is_max = is_max & (
+                (r > padded[:-2, :-2])  # Top-left neighbor
+                & (r > padded[:-2, 2:])  # Top-right neighbor
+                & (r > padded[2:, :-2])  # Bottom-left neighbor
+                & (r > padded[2:, 2:])  # Bottom-right neighbor
+            )
+        
+        # Create a suppressed version where only local maxima are kept
+        suppressed = np.where(is_max, r, 0)
+        
+        # Apply threshold if requested
+        if tau > 0:
+            suppressed = np.where(suppressed >= tau, suppressed, 0)
+        
+        return suppressed
+
+
+    r = non_maximum_suppression(r)
+    return np.where(r >= tau, r, r>= tau)
+
+
+```
+
+```{python}
+c_img = corner_detector(0.06, 516)
+plt.imshow(c_img)
+print(c_img[2,1])
+plt.show()
+```
+
+Question 13 => G
+
+```{python}
+def fit_line_homogeneous(p1, p2):
+	return np.cross(p1, p2)
+```
+
+```{python}
+def classify_points(points, line, threshold):
+	a, b, c = line
+	denominator = a**2 + b**2
+	threshold_sq = (threshold**2) * denominator
+	result_x = []
+	result_y = []
+	N = points.shape[1]
+	for i in range(N):
+		x, y = points[:, i]
+		numerator_sq = (a * x + b * y + c)**2
+		if numerator_sq <= threshold_sq:
+			result_x.append(x)
+			result_y.append(y)
+
+	result = np.array([result_x,result_y])
+	return result
+```
+
+```{python}
+def calc_consensus(points, line, threshold):
+	inlier_set = classify_points(points, line, threshold)
+	return inlier_set, inlier_set.shape[1]
+```
+
+```{python}
+data = np.load("./materials/ransac.npy", allow_pickle=True).item()
+tau = 0.2
+
+points = data['points']
+x1 = data['x1']
+x2 = data['x2']
+x1 = np.append(x1, 1)
+x2 = np.append(x2, 1)
+line = fit_line_homogeneous(x1, x2)
+inliers, num_of_inliers = calc_consensus(points, line, tau)
+print(num_of_inliers)
+```
+
+Question 14 => B
+
+
+```{python}
+import numpy as np
+p = 0.95
+inliers = 103 / 404
+eps = 1 - inliers
+print(np.log(1 - p )/ np.log(1 - (1-eps)**4))
+```
+
+Question 15 => F
+Question 16 => A
+Question 17 => B
+
+Question 18 => A 
+```{python}
+K = np.arange(9).reshape(3,3) + 1
+print(np.hstack((np.eye(3), np.zeros(3).reshape(-1,1))))
+print(K @ np.hstack((np.eye(3), np.zeros(3).reshape(-1,1))))
+```
+
+Question 20 => D
+
+Question 21 => F
