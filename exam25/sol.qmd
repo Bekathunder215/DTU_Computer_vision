@@ -1,0 +1,794 @@
+Question 1 => G
+```{python}
+def p_i(points):
+    return points[:-1]/ points[-1] 
+
+def p_i_inverse(points):
+    _, n = points.shape
+    return np.vstack((points, np.ones(n)))
+```
+
+```{python}
+def distance_from_line(l, p, homo=True):
+	l = l / np.sqrt(l[0]**2 + l[1]**2)
+	p = p_i_inverse(p) if not homo else p
+	p = p / p[-1] # to make sure scale is 1
+
+	return l.T@p
+
+```
+
+```{python}
+import numpy as np
+p1 = np.array([[92],
+	      [87]])
+
+l = np.array([[0.9],
+	     [0.2],
+	     [0.4]])
+```
+
+```{python}
+print(distance_from_line(l, p1, homo=False))
+```
+
+Question 2 => D
+
+
+```{python}
+from matplotlib import pyplot as plt
+data = np.load("./Exam25/materials/harris.npy", allow_pickle=True).item()
+
+I_xx = data['g*(I_x^2)']
+I_yy = data['g*(I_y^2)']
+I_xy = data['g*(I_x I_y)']
+
+print(data.keys())
+
+k = 0.06
+tau = 5
+```
+
+```{python}
+def harris_measure(k):
+    a, c, b = I_xx, I_xy, I_yy
+    return np.multiply(a,b) - c**2 - k * (a + b) ** 2
+```
+
+```{python}
+def corner_detector(k, tau):
+    r = harris_measure(k)
+    
+
+    def non_maximum_suppression(r, tau=0.0, include_diagonals=True):
+        """
+        Apply non-maximum suppression to an array.
+        
+        Parameters:
+        r (numpy.ndarray): Input array to apply NMS
+        tau (float): Threshold value to filter results (default: 0.0)
+        include_diagonals (bool): Whether to include diagonal neighbors in comparison (default: True)
+        
+        Returns:
+        numpy.ndarray: Array with non-maxima suppressed
+        """
+        # Pad the array with -inf to handle edge cases
+        padded = np.pad(r, pad_width=1, mode="constant", constant_values=-np.inf)
+        
+        # Compare with 4-connected neighbors (horizontal and vertical)
+        is_max = (
+            (r > padded[1:-1, :-2])  # Left neighbor
+            & (r > padded[1:-1, 2:])  # Right neighbor
+            & (r > padded[:-2, 1:-1])  # Top neighbor
+            & (r > padded[2:, 1:-1])  # Bottom neighbor
+        )
+        
+        # Also compare with diagonal neighbors if requested
+        if include_diagonals:
+            is_max = is_max & (
+                (r > padded[:-2, :-2])  # Top-left neighbor
+                & (r > padded[:-2, 2:])  # Top-right neighbor
+                & (r > padded[2:, :-2])  # Bottom-left neighbor
+                & (r > padded[2:, 2:])  # Bottom-right neighbor
+            )
+        
+        # Create a suppressed version where only local maxima are kept
+        suppressed = np.where(is_max, r, 0)
+        
+        # Apply threshold if requested
+        if tau > 0:
+            suppressed = np.where(suppressed >= tau, suppressed, 0)
+        
+        return suppressed
+
+
+    r = non_maximum_suppression(r)
+    return np.where(r >= tau, r, r>= tau)
+
+
+```
+
+```{python}
+c_img = corner_detector(0.06, 175)
+plt.imshow(c_img)
+print(c_img[1,3])
+
+print(c_img[3,1])
+plt.show()
+```
+
+Question 3 => H
+I can check with dummy image
+
+```{python}
+def gaussian1DKernel(sigma):
+    t = sigma**2
+    r = np.ceil(4 * sigma)
+    x = np.arange(-r, r + 1).reshape(-1, 1)
+    g = np.exp(-x**2 / (2 * t))
+    g = g/np.sum(g)
+    gd = -x * g / t 
+    return g, gd
+```
+
+```{python}
+def gaussian_smoothing(im, sigma):
+	im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(float) 
+	g, gd = gaussian1DKernel(sigma)
+	I = cv2.sepFilter2D(im_gray, -1, g.T, g)
+	Ix = cv2.sepFilter2D(im_gray, -1, gd.T, g)
+	Iy = cv2.sepFilter2D(im_gray, -1, g.T, gd)
+	return I, Ix,Iy
+```
+
+```{python}
+import numpy as np
+import cv2
+sigma = 10
+x = np.arange(-3*sigma, 3*sigma+1).reshape(-1,1)
+g = np.exp(-x**2/(2*sigma**2))
+g = g / sum(g)
+gd = -x*(sigma**2)*g
+
+im = cv2.imread("../6_lab/week06_data/TestIm1.png")[:, :, ::-1]
+im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(float)
+Ix = cv2.sepFilter2D(im, -1, gd.T, g)
+plt.imshow(Ix)
+plt.show()
+
+
+im1 = cv2.filter2D(im, -1, gd)
+im2 = cv2.filter2D(im, -1, g.T)
+im3 = cv2.filter2D(im, -1, g)
+im4 = cv2.filter2D(cv2.filter2D(im, -1, gd), -1, g.T)
+im5 = cv2.filter2D(cv2.filter2D(im, -1, gd), -1, gd.T)
+im6 = cv2.filter2D(cv2.filter2D(im, -1, g), -1, gd.T)
+im7 = cv2.filter2D(cv2.filter2D(im, -1, g), -1, g.T)
+
+
+plt.imshow(im1)
+plt.show()
+plt.imshow(im2)
+plt.show()
+plt.imshow(im3)
+plt.show()
+plt.imshow(im4)
+plt.show()
+plt.imshow(im5)
+plt.show()
+plt.imshow(im6)
+plt.show()
+plt.imshow(im7)
+plt.show()
+```
+
+Question 4 => D
+
+```{python}
+import numpy as np
+p = 0.95
+inliers = 405 / 864
+eps = 1 - inliers
+print(np.log(1 - p )/ np.log(1 - (1-eps)**4))
+```
+
+Question 5 => B
+
+Estimate essential matrix m = 1
+95\%
+```{python}
+print(3.84 * 0.4**2)
+```
+
+Question 6 => G
+
+Question 7 => C
+
+
+```{python}
+def read_opencv_img(name):
+	return cv2.imread(name)[:,:,::-1]
+
+im0 = read_opencv_img("./Exam25/materials/board0.jpg")
+im1 = read_opencv_img("./Exam25/materials/board1.jpg")
+im2 = read_opencv_img("./Exam25/materials/board2.jpg")
+im3 = read_opencv_img("./Exam25/materials/board3.jpg")
+im4 = read_opencv_img("./Exam25/materials/board4.jpg")
+
+imgs = [im0, im1, im2, im3, im4]
+
+for i in range(5):
+    plt.imshow(imgs[i])
+    plt.show()
+```
+
+```{python}
+import glob
+def calibrate_camera(image_paths, checkerboard_size=(7, 10)):
+    """
+    Calibrate camera from checkerboard images.
+    
+    Args:
+        image_paths: List of paths to images containing checkerboard patterns
+        checkerboard_size: Size of the checkerboard (internal corners)
+        
+    Returns:
+        ret: RMS reprojection error
+        mtx: Camera matrix containing focal lengths (fx, fy) and optical centers (cx, cy)
+        dist: Distortion coefficients
+        rvecs: Rotation vectors for each image
+        tvecs: Translation vectors for each image
+    """
+    # Prepare object points (0,0,0), (1,0,0), (2,0,0) ... (8,5,0)
+    objp = np.zeros((checkerboard_size[0] * checkerboard_size[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:checkerboard_size[0], 0:checkerboard_size[1]].T.reshape(-1, 2)
+    
+    # Arrays to store object points and image points
+    objpoints = []  # 3D points in real world space
+    imgpoints = []  # 2D points in image plane
+    
+    # Process each image separately before attempting to create the visualization
+    successful_images = []
+    
+    for fname in image_paths:
+        # Read image
+        img = cv2.imread(fname)
+        if img is None:
+            print(f"Warning: Could not read image {fname}")
+            continue
+            
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Find the chessboard corners
+        # Let's try with different flags to improve detection
+        flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_FAST_CHECK
+        ret, corners = cv2.findChessboardCorners(gray, checkerboard_size, flags)
+        
+        # If found, add object points, image points
+        if ret:
+            # Refine corner positions for better accuracy
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+            corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            
+            objpoints.append(objp)
+            imgpoints.append(corners2)
+            successful_images.append((img, fname))
+            print(f"Successfully detected checkerboard in {fname}")
+        else:
+            print(f"Could not find checkerboard pattern in {fname}")
+    
+    # Check if we have any successful detections
+    if not objpoints:
+        raise ValueError("No checkerboard patterns found in any of the images. Check the file paths and checkerboard_size parameter.")
+    
+    # Now create visualization only for successful images
+    fig, axes = plt.subplots(1, len(successful_images), figsize=(15, 5))
+    if len(successful_images) == 1:
+        axes = [axes]
+        
+    for i, (img, fname) in enumerate(successful_images):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        ret, corners = cv2.findChessboardCorners(gray, checkerboard_size, None)
+        cv2.drawChessboardCorners(img, checkerboard_size, corners, ret)
+        axes[i].imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        axes[i].set_title(f'Image {i+1}')
+        axes[i].axis('off')
+    
+    # plt.tight_layout()
+    # plt.show()
+    
+    # Calibrate camera using the successful images
+    if gray is not None:
+        ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
+            objpoints, imgpoints, gray.shape[::-1], None, None
+        )
+        return ret, mtx, dist, rvecs, tvecs
+    else:
+        raise ValueError("Failed to process any images")    
+        
+# Define paths to the checkerboard images
+image_paths = sorted(glob.glob('./Exam25/materials/board*.jpg'))
+
+# Run calibration
+ret, camera_matrix, dist_coeffs, rvecs, tvecs = calibrate_camera(image_paths)
+print(camera_matrix[0,0])
+```
+
+Question 8 => A
+```{python}
+def p_i(points):
+    return points[:-1]/ points[-1] 
+
+def p_i_inverse(points):
+    _, n = points.shape
+    return np.vstack((points, np.ones(n)))
+```
+
+```{python}
+def projectpoints(K, R, t, Q):
+    R_t = np.hstack((R, t))
+    return K @ R_t @ Q
+```
+
+```{python}
+f = 1350
+delta_x = 640
+delta_y = 480
+
+K = np.array([[f, 0, delta_x],
+	      [0, f, delta_y],
+	      [0, 0, 1]])
+
+R = cv2.Rodrigues(np.array([0.1, -0.3, 0.2]))[0]
+t = np.array([[0.05, -0.02, 0.04]]).T
+
+
+Q = np.array([0.25, 0.18, 1.5]).reshape(3,1)
+
+print( p_i( projectpoints(K, R, t, p_i_inverse(Q)) ) )
+```
+
+Question 9 => D
+
+Question 10 => D
+
+```{python}
+K = np.loadtxt("./Exam25/materials/K.txt")
+NUM_IMGS = 3
+
+images = []
+
+im0 = cv2.imread(f"./Exam25/materials/im1.jpg")[:,:,::-1]
+im1 = cv2.imread(f"./Exam25/materials/im2.jpg")[:,:,::-1]
+im2 = cv2.imread(f"./Exam25/materials/im3.jpg")[:,:,::-1]
+
+
+sift = cv2.SIFT.create()
+kp0, des0 = sift.detectAndCompute(cv2.cvtColor(im0, cv2.COLOR_BGR2GRAY), None)
+#kp0 = np.array([k.pt for k in kp0])
+kp1, des1 = sift.detectAndCompute(cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY), None)
+#kp1 = np.array([k.pt for k in kp1])
+kp2, des2 = sift.detectAndCompute(cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY), None)
+```
+
+
+```{python}
+bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+matches01 = sorted(bf.match(des0, des1), key=lambda x: x.distance)
+matches12 = sorted(bf.match(des1, des2), key=lambda x: x.distance)
+#matches01 = np.array([(m.queryIdx, m.trainIdx) for m in matches01])
+#matches12 = np.array([(m.queryIdx, m.trainIdx) for m in matches12])
+
+# Create empty lists to store the coordinates
+points1 = []  # for image im0
+points2 = []  # for image im1
+
+# Extract point coordinates using match indices
+for match in matches01:
+    # Get the indices of the matching keypoints
+    idx1 = match.queryIdx  # Index in the first image keypoints
+    idx2 = match.trainIdx  # Index in the second image keypoints
+    
+    # Get the actual x,y coordinates from the keypoints
+    pt1 = kp0[idx1].pt  # (x,y) in first image
+    pt2 = kp1[idx2].pt  # (x,y) in second image
+    
+    # Add to our lists
+    points1.append(pt1)
+    points2.append(pt2)
+
+# Convert to numpy arrays for OpenCV functions
+points1 = np.array(points1, dtype=np.float32)
+points2 = np.array(points2, dtype=np.float32)
+```
+
+```{python}
+E, mask_essential = cv2.findEssentialMat(points1, points2, K,  method=cv2.RANSAC, 
+                                         prob=0.95, threshold=5.0)
+
+_, R1, t1, mask_pose = cv2.recoverPose(E, points1, points2, K)
+
+P0 = K @ np.hstack([np.eye(3), np.zeros((3,1))]) 
+P1 = K @ np.hstack((R1, t1.reshape(-1,1)))
+
+# Combine masks to get only inliers that lie in front of both cameras
+mask_essential = mask_essential.ravel() > 0
+mask_pose = mask_pose.ravel() > 0
+combined_mask = np.logical_and(mask_essential, mask_pose)
+
+# Filter original matches to keep only the inliers
+matches01 = [m for i, m in enumerate(matches01) if combined_mask[i]]
+
+matches01_np = np.array([(m.queryIdx, m.trainIdx) for m in matches01])
+matches12_np = np.array([(m.queryIdx, m.trainIdx) for m in matches12])
+```
+
+```{python}
+_, idx01, idx12 = np.intersect1d(matches01_np[:,1], matches12_np[:,0], return_indices=True)
+```
+
+```{python}
+# Get the actual matches from the filtered lists
+triplet_matches01 = matches01_np[idx01]  # Shape (N,2)
+triplet_matches12 = matches12_np[idx12]  # Shape (N,2)
+
+# Verify correspondence in image 1
+assert np.all(triplet_matches01[:,1] == triplet_matches12[:,0]), "Mismatch in image 1 indices"
+
+# Extract points using PROPER indices from matches
+points0 = np.array([kp0[i].pt for i in triplet_matches01[:,0]], dtype=np.float32)  # Image 0 points
+points1 = np.array([kp1[i].pt for i in triplet_matches01[:,1]], dtype=np.float32)  # Image 1 points
+points2 = np.array([kp2[i].pt for i in triplet_matches12[:,1]], dtype=np.float32)  # Image 2 points
+```
+
+```{python}
+points_4d = cv2.triangulatePoints(P0, P1, points0.T, points1.T)
+Q = (points_4d[:3] / points_4d[3]).T  # Convert to Nx3 array
+
+# Step 2: Estimate pose of image 2 using PnP RANSAC
+distCoeffs = np.zeros(5)  # As specified, lens distortion is already corrected
+
+_, rvec, tvec, inliers = cv2.solvePnPRansac(
+Q, points2, K, distCoeffs,
+flags=cv2.SOLVEPNP_ITERATIVE,
+confidence=0.95
+)
+
+
+#Convert rotation vector to rotation matrix
+R2, _ = cv2.Rodrigues(rvec)
+
+print( - R2.T @ tvec )
+
+print(R2.T)
+
+print("A", cv2.Rodrigues(( 0.2, -0.1, -0.1))[0] )
+print("B", cv2.Rodrigues(( 0.9, -1.0, -0.5))[0] )
+print("C", cv2.Rodrigues((-0.8, 0.6, -0.9))[0] )
+print("D", cv2.Rodrigues(( 0.0, -0.1, -0.0))[0] )
+print("E", cv2.Rodrigues(( 1.2, 0.1, 0.2))[0] )
+print("F", cv2.Rodrigues((-0.5, -0.1, 0.6))[0] )
+print("G", cv2.Rodrigues(( 0.6, -0.6, 0.2))[0] )
+print("H", cv2.Rodrigues((-0.3, 0.8, 0.1))[0] )
+print("I", cv2.Rodrigues(( 0.4, 0.7, 1.0))[0] )
+print("J", cv2.Rodrigues(( 0.1, 0.5, -0.8))[0] )
+```
+
+Question 11 => A
+
+Question 12 => A
+
+Question 13 => A
+
+Question 14 => A
+
+```{python}
+def hest(q1: np.ndarray, q2: np.ndarray, normalize: bool = False):
+    if normalize:
+        T1, src_pts = normalize2d(q1)
+        T2, dst_pts = normalize2d(q2)
+    else:
+        src_pts = q1
+        dst_pts = q2
+
+    N = src_pts.shape[1]
+    B = np.zeros((2*N, 9))
+
+    for i in range(N):
+        x, y = src_pts[:, i]
+        xp, yp = dst_pts[:, i]
+        
+        B[2*i] = [-x, -y, -1, 0, 0, 0, x*xp, y*xp, xp]
+        B[2*i+1] = [0, 0, 0, -x, -y, -1, x*yp, y*yp, yp]
+
+    # Solve using SVD (last row of V^T)
+    _, _, VT = np.linalg.svd(B)
+    H = VT[-1].reshape(3, 3)
+
+    if normalize:
+        # Denormalize: H = T2^{-1} @ H_norm @ T1
+        H = np.linalg.inv(T2) @ H @ T1
+
+    return H   # Normalize by last element
+```
+
+```{python}
+p1 = np.array([[1.0, 2.0, 2.0, 1.0], [1.0, 1.0, 2.0, 2.0]])
+p2 = np.array([[1.2, 2.2, 2.1, 1.1], [0.9, 1.0, 2.0, 2.1]])
+
+Hest = hest(p2, p1)
+Hest = Hest / Hest[2,2]
+
+print(Hest)
+
+print( p_i(Hest @ p_i_inverse(p2)))
+```
+
+Question 15 => F
+
+```{python}
+f = 350
+delta_x = 800
+delta_y = 600
+
+K = np.array([[f, 0, delta_x],
+	      [0, f, delta_y],
+	      [0, 0, 1]])
+
+k3 = -0.15
+k5 = 0.008
+k7 = -0.02
+# Undistorted pixel coordinates
+undistorted_pixel = np.array([420, 510])
+
+# Step 1: Extract intrinsic parameters
+fx = K[0, 0]  # focal length in x
+fy = K[1, 1]  # focal length in y
+cx = K[0, 2]  # principal point x
+cy = K[1, 2]  # principal point y
+
+# Step 2: Convert undistorted pixel to normalized coordinates
+x_norm = (undistorted_pixel[0] - cx) / fx
+y_norm = (undistorted_pixel[1] - cy) / fy
+
+# Step 3: Calculate the radius in normalized space
+r_squared = x_norm**2 + y_norm**2
+r = np.sqrt(r_squared)
+
+# Step 4: Apply the distortion model
+distortion_factor = 1 + (k3 * r_squared) + (k5 * r_squared**2) + (k7 * r_squared**3)
+x_distorted_norm = x_norm * distortion_factor
+y_distorted_norm = y_norm * distortion_factor
+
+# Step 5: Convert back to pixel coordinates
+x_distorted = (x_distorted_norm * fx) + cx
+y_distorted = (y_distorted_norm * fy) + cy
+
+# Result: The distorted pixel coordinates
+distorted_pixel = np.array([x_distorted, y_distorted])
+
+print(f"Undistorted pixel: {undistorted_pixel}")
+print(f"Normalized coordinates (undistorted): ({x_norm:.6f}, {y_norm:.6f})")
+print(f"r: {r:.6f}")
+print(f"Distortion factor: {distortion_factor:.6f}")
+print(f"Normalized coordinates (distorted): ({x_distorted_norm:.6f}, {y_distorted_norm:.6f})")
+print(f"Distorted pixel: {distorted_pixel}")
+```
+
+Question 16 => I
+
+```{python}
+H1 = np.array([[-71.4, -7.62, -244.], [-2.08, -114., -306.],[-.0527, -.0147, -.611]])
+H2 = np.array([[-101., 1.90, 264.],[-47.3, -99.6, 330.],[.0101, -.0498, .659]])
+H3 = np.array([[-103., -41.5, -254.],[-23.2, -55.2, -317.],[-.0418, .037, -.635]])
+```
+
+```{python}
+def construct_v(H, alpha, beta):
+        res = np.zeros(6)
+        res[0] = H[0,alpha] * H[0,beta]
+        res[1] = H[0,alpha] * H[1,beta] + H[1,alpha] * H[0,beta] 
+        res[2] = H[1,alpha] * H[1,beta]
+        res[3] = H[2,alpha] * H[0,beta] + H[0,alpha] * H[2,beta]
+        res[4] = H[2,alpha] * H[1,beta] + H[1,alpha] * H[2,beta]
+        res[5] = H[2,alpha] * H[2,beta]
+        return res
+
+def estimate_b(Hs):
+    N = len(Hs)
+    V = np.zeros((2*N, 6))  
+
+    for i in range(N):
+        v_12 = construct_v(Hs[i],0,1)
+        v_11 = construct_v(Hs[i],0,0)
+        v_22 = construct_v(Hs[i],1,1)
+        diff = v_11 - v_22
+	
+        V[2*i:2*i+2] = np.vstack((v_12, diff))
+
+    _, _, VT = np.linalg.svd(V)
+    b = VT[-1, :]
+    return b
+```
+
+```{python}
+def estimate_intrinsics(Hs):
+    b = estimate_b(Hs) # [ B_11, B_12, B_22, B_13, B_23, B_33]
+    v0 = (b[1]*b[3] - b[0]*b[4])/ (b[0]*b[2] - b[1]**2)
+    lmbda = b[5] - (b[3]**2 + v0 * ( b[1]*b[3] - b[0]*b[4] )) / b[0]
+    alpha = np.sqrt( lmbda / b[0])
+    beta = np.sqrt(lmbda*b[0]/ (  b[0] * b[2] - b[1]**2 ))
+    gamma = - b[1] * alpha**2 * beta / lmbda
+    u0 = gamma * v0 / beta - b[3] * alpha**2 / lmbda
+
+    K = np.array([[alpha, gamma, u0],
+                  [0, beta, v0],
+                  [0, 0, 1]])
+    return K
+```
+
+```{python}
+print(estimate_intrinsics([H1, H2, H3]) )
+```
+
+Question 17 => E
+
+Question 18 => B
+
+```{python}
+def cross_op(p):
+	res = np.zeros((3,3))
+	res[0,1] = -p[2]
+	res[0,2] = p[1]
+	res[1,0] = p[2]
+	res[1,2] = -p[0]
+	res[2,0] = -p[1]
+	res[2,1] = p[0]
+	return res
+```
+
+
+```{python}
+def compute_essential(R, t):
+	return cross_op(t) @ R
+```
+
+```{python}
+def compute_fundamental(R, t, K_1, K_2):
+	E = compute_essential(R, t)
+	return np.linalg.inv(K_2).T @ E  @ np.linalg.inv(K_1)
+```
+
+```{python}
+def epipolar_through_point(q, F):
+	return F @ q
+```
+
+```{python}
+K = np.array([[800, 0, 920], [0, 800, 580.0], [0, 0, 1]], float)
+R1 = cv2.Rodrigues(np.array([2.1, 0.2, 0.1]))[0]
+t1 = np.array([[1.0], [-1.0], [5.0]], float)
+R2 = cv2.Rodrigues(np.array([1.9, 1.7, -0.4]))[0]
+t2 = np.array([[-2.0], [-2.0], [16.0]], float)
+R3 = cv2.Rodrigues(np.array([-1.6, -0.1, -2.3]))[0]
+t3 = np.array([[-3.0], [1.0], [21.0]], float)
+
+p1 = np.array([967.0, 441.0]).reshape(2,1)
+p2 = np.array([898.0, 515.0]).reshape(2,1)
+p3 = np.array([802.0, 568.0]).reshape(2,1)
+
+R, t =  R3 @ R2.T, t3 - R3 @ R2.T @ t2 # Transform relative to Camera 2 (note this is the reversed formula compared to 3_lab)
+l = epipolar_through_point(p_i_inverse(p2), compute_fundamental(R, t, K, K))
+
+print(distance_from_line(l, p3, homo=False))
+```
+
+Question 19 => E
+
+K matrix has 3 degrees of freedom without distortion (f, delta_x, delta_y)
+then, after that is fixed, we calc project and then look at errors
+Plus there is one extra param for the lens distortion
+
+10 images each with 10 corners with X and Y counted => 2 * 10 * 10 = 200
+
+Question 20 => E
+```{python}
+
+NUM_IMGS = 2
+
+images = []
+
+im0 = cv2.imread(f"./Exam25/materials/view1.jpg")[:,:,::-1]
+im1 = cv2.imread(f"./Exam25/materials/view2.jpg")[:,:,::-1]
+
+
+sift = cv2.SIFT.create()
+kp0, des0 = sift.detectAndCompute(cv2.cvtColor(im0, cv2.COLOR_BGR2GRAY), None)
+kp1, des1 = sift.detectAndCompute(cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY), None)
+```
+
+```{python}
+bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+matches01 = sorted(bf.match(des0, des1), key=lambda x: x.distance)
+#matches01 = np.array([(m.queryIdx, m.trainIdx) for m in matches01])
+#matches12 = np.array([(m.queryIdx, m.trainIdx) for m in matches12])
+
+# Create empty lists to store the coordinates
+points1 = []  # for image im0
+points2 = []  # for image im1
+
+# Extract point coordinates using match indices
+for match in matches01:
+    # Get the indices of the matching keypoints
+    idx1 = match.queryIdx  # Index in the first image keypoints
+    idx2 = match.trainIdx  # Index in the second image keypoints
+    
+    # Get the actual x,y coordinates from the keypoints
+    pt1 = kp0[idx1].pt  # (x,y) in first image
+    pt2 = kp1[idx2].pt  # (x,y) in second image
+    
+    # Add to our lists
+    points1.append(pt1)
+    points2.append(pt2)
+
+# Convert to numpy arrays for OpenCV functions
+points1 = np.array(points1, dtype=np.float32)
+points2 = np.array(points2, dtype=np.float32)
+```
+
+```{python}
+K = np.loadtxt("./Exam25/materials/K.txt")
+E, mask_essential = cv2.findEssentialMat(points1, points2, K,  method=cv2.RANSAC, 
+                                         prob=0.95, threshold=5)
+
+F = np.linalg.inv(K).T @ E  @ np.linalg.inv(K)
+print( F / F[2,2])
+
+_, R1, t1, mask_pose = cv2.recoverPose(E, points1, points2, K)
+```
+
+Question 21 => G
+
+```{python}
+def fit_line_homogeneous(p1, p2):
+	return np.cross(p1, p2)
+```
+
+```{python}
+def classify_points(points, line, threshold):
+	a, b, c = line
+	denominator = a**2 + b**2
+	threshold_sq = (threshold**2) * denominator
+	result_x = []
+	result_y = []
+	N = points.shape[1]
+	for i in range(N):
+		x, y = points[:, i]
+		numerator_sq = (a * x + b * y + c)**2
+		if numerator_sq <= threshold_sq:
+			result_x.append(x)
+			result_y.append(y)
+
+	result = np.array([result_x,result_y])
+	return result
+```
+
+```{python}
+def calc_consensus(points, line, threshold):
+	inlier_set = classify_points(points, line, threshold)
+	return inlier_set, inlier_set.shape[1]
+```
+
+```{python}
+data = np.load("./Exam25/materials/RANSAC.npy", allow_pickle=True).item()
+tau = 0.2
+
+points = data['points']
+x1 = data['x1']
+x2 = data['x2']
+x1 = np.append(x1, 1)
+x2 = np.append(x2, 1)
+line = fit_line_homogeneous(x1, x2)
+inliers, num_of_inliers = calc_consensus(points, line, tau)
+print(num_of_inliers)
+```
